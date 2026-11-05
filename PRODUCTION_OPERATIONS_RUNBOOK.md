@@ -789,3 +789,183 @@ Hisobotlar pulni **valyuta bo'yicha guruhlamasdan** yig'adi (`reports.py` da
 `currency` ga havola yo'q; `mv_daily_sales`/`mv_product_profit` ham valyutasiz).
 Shu bois invariant: **bitta tenant ichida aralash valyuta bo'lmasin.** Batafsil:
 `apps/server/app/services/currency.py` sarlavhasi.
+
+
+## 16. Qo'lda hisob-kitob — AUDITLANADIGAN ish tartibi (ish tartibi TASDIQLANGAN)
+
+> **HOLATI: ISH TARTIBI TASDIQLANGAN — ega qarori, 2026-10-29.**
+> Birinchi **cheklangan** kohort uchun **bitta avtorizatsiyalangan operator**
+> va **qo'lda boshqariladigan hisob-kitob / to'lov kuzatuvi** tasdiqlandi.
+>
+> ⚠️  **TASDIQLANMAGAN va bu bo'lim BELGILAMAYDI:** tarif **narxlari**,
+>     tarif **davri**, **trial** muddati, **grace** davri va **kohort
+>     hajmi** (nechta savdogar). Bular ega qarori bo'lib qolaveradi va
+>     bu yerda O'YLAB TOPILMAYDI.
+>
+> ⚠️  **AVTOMATIK OBUNA MAJBURLASH YO'Q va YOQILMADI.** Obuna yozuvi
+>     bo'lmagan ijarachi `GRANDFATHERED` qoladi
+>     (`services/subscription/state.py`:
+>     `evaluate_subscription_access(None, now)` → `managed=False`, yozishga
+>     ruxsat). Konsol obuna qatori **YARATMAYDI** (`api/v1/admin.py` da
+>     `Subscription(` 0 marta, `current_period_end` 0, `grace_until` 0).
+>
+> ⚠️  **ATRIBUTSIYA OGOHLANTIRISHI KUCHDA QOLADI.** Konsol amallari
+>     **bitta umumiy kalit** (`VENDOR_ADMIN_KEY`) va **bitta umumiy TOTP**
+>     bilan bajariladi; nomli `PlatformAdmin` hisoblari **simlanmagan**.
+>     `GET /admin/audit` buni aniq e'lon qiladi:
+>     `"attribution": "shared-key"`. Ya'ni audit izi «konsoldan qilindi»
+>     deydi, «KIM qildi» degan savolga javob **BERMAYDI**. Tasdiqlangan
+>     ish tartibi aynan **bitta operator** bo'lgani uchun maqbul; ikkinchi
+>     operator qo'shilsa bu konfiguratsiya **yaroqsiz** bo'ladi
+>     (`PRODUCTION_OPERATIONS_RUNBOOK.md` §17.1).
+>
+> Bo'lim faqat **bugun amalda ishlayotgan** mexanizmlardan qanday
+> auditlanadigan jarayon yasash mumkinligini yozadi.
+
+### 16.1 Bugun nima ISHLAYDI, nima ISHLAMAYDI (o'lchangan)
+
+| Imkoniyat | Holati | Dalil |
+|---|---|---|
+| Tarif tayinlash (`start` / `start+` / `business`) | **ISHLAYDI** | `PATCH /admin/companies/{id}/plan` -> `Setting(key="plan")` |
+| Tarif cheklovlarini MAJBURLASH | **ISHLAYDI** | `branches.py` `PLAN_LIMITS` (1/5/999) va `USER_LIMITS` (10/30/999) -> 403 `tarif_limit` |
+| Savdogar tarifni o'zi ko'tarishi | **TO'SILGAN** | `settings.py`: `plan`/`suspended` kalitlari 403 |
+| Kirishni YOPISH / OCHISH | **ISHLAYDI** | `PATCH /admin/companies/{id}/suspend` -> `Setting(key="suspended")`; eski token ham 403 |
+| Konsol amallarining audit izi | **ISHLAYDI** | `GET /admin/audit` (aktorsiz + vendor entity'lari) |
+| Obuna qatori (`subscriptions`) | **YARATILMAYDI** | provisioning obuna yozmaydi -> `evaluate_subscription_access(None, ...)` = `GRANDFATHERED`, `writes_allowed=True` |
+| To'lovni QAYD ETISH | **servis bor, MARSHRUT YO'Q** | `services/subscription/payments.record_payment` (idempotent) — HTTP sirti yo'q |
+| To'lamaslikni AVTOMATIK majburlash | **YO'Q** | hech bir ish (job) `restricted_at` yozmaydi; `subscription_gate` har marshrutni qamraydi, lekin qator bo'lmaganda GRANDFATHERED |
+
+**Eng muhim xulosa:** bugungi holatda **hech bir to'lagan savdogar tasodifan
+bloklanmaydi** — chunki majburlash mexanizmi uchun obuna qatori umuman yo'q.
+To'xtatish FAQAT operator qo'li bilan bo'ladi. Shu bois qo'lda hisob-kitob
+xavfsiz, lekin u **tartib-qoida** talab qiladi (pastda).
+
+### 16.2 Taklif qilinadigan ish tartibi (har qadam IZ qoldiradi)
+
+1. **Qabul.** §12 dagi skript bo'yicha do'kon ochiladi (konsol:
+   *Yangi do'kon*). Tarif tanlanadi. Audit izi: `create` / `company`.
+2. **Hisob-faktura.** Ega (yoki buxgalter) kelishilgan davr uchun hujjat
+   beradi. **BinOS ichida hisob-faktura YO'Q** — u tashqi jarayon.
+3. **To'lov keldi.** Operator konsolda hech narsa o'zgartirmaydi (tarif
+   allaqachon to'g'ri). Iz: tashqi hujjat.
+4. **To'lov kechikdi.** Ega qaroriga ko'ra operator *To'xtatish (kirishni
+   yopish)* ni bosadi. Audit izi: `update` / `company` / `{"suspended": true}`.
+   Savdogar aniq xabar oladi (`_SUSPENDED_MSG`), ma'lumot O'CHMAYDI.
+5. **To'lov keldi (kechikkandan keyin).** *Qayta yoqish* bosiladi. Audit izi:
+   `{"suspended": false}`. Savdogarning ESKI tokeni ham darhol ishlaydi.
+6. **Mijoz ketdi.** *Yumshoq o'chirish* (kod terib tasdiqlanadi). Kirish
+   yopiladi, biznes ma'lumoti QOLADI, 'O'chirilganlar' ro'yxatidan tiklash
+   mumkin. Audit izi: `delete` / `company`, keyin `{"restored": true}`.
+
+**Oyma-oy rekonsiliatsiya:** `GET /api/v1/admin/audit` dan `suspended` /
+`plan` o'zgarishlari ro'yxati olinadi va tashqi to'lov hujjatlari bilan
+solishtiriladi. Mos kelmasa — qo'lda tuzatiladi va sababi yozib qo'yiladi.
+
+### 16.3 Bu tartibning CHEKLOVLARI, ochiq aytiladi
+
+* **Atributsiya UMUMIY kalitga.** Konsolga kirish bitta `VENDOR_ADMIN_KEY` +
+  bitta TOTP siri bilan. Audit izi «konsoldan qilindi» deydi, «qaysi odam»
+  demaydi va **demasligi kerak**. Shaxsiy javobgarlik faqat nomli platforma
+  hisoblari bilan mumkin (`models/subscription.PlatformAdmin` — model bor,
+  SIMLANMAGAN). Ko'p operatorli faza shuni TALAB qiladi.
+* **Eslatma yo'q.** Muddat tugashi haqida savdogarga ham, operatorga ham
+  avtomatik ogohlantirish YUBORILMAYDI. Kechikishni faqat tashqi jarayon
+  aniqlaydi.
+* **Grace yo'q.** Qo'lda to'xtatish DARHOL kuchga kiradi (eski tokenlar ham).
+  «3 kun grace» kabi xulq kodda YO'Q va bu yerda O'YLAB TOPILMAYDI.
+* **Miqyos.** Bu tartib qo'lda nazorat qilinadigan savdogar soni uchun
+  yaroqli. Reklama hajmi shu soniga moslashtirilishi kerak.
+
+### 16.4 Ega tasdiqini kutadigan qarorlar (kod emas, BIZNES)
+
+1. Tarif katalogi: har tarif uchun narx va davr.
+2. Trial bormi, qancha?
+3. Muddat tugaganda xulq: `RESTRICTED` (o'qish ochiq, yozuv yopiq) tijorat
+   jihatdan to'g'rimi, yoki to'liq to'xtatish?
+4. Grace davri bormi, qancha?
+5. Mavjud savdogarlar grandfathered qoladimi?
+6. Nechta NOMLI operator kerak va qanday rollar bilan?
+7. **Birinchi kohort uchun qo'lda hisob-kitob QABUL QILINADIMI?** (Bu bo'lim
+   shu savolga HA degan javobni TAXMIN QILMAYDI.)
+
+Bu ro'yxatdagi birortasi hal bo'lmaguncha obuna/billing dvigatelini yoqish
+**TAQIQ**: yoqilgan dvigatel qator yaratadi, qator esa `GRANDFATHERED` ni
+yo'qotadi va to'lagan savdogarni ham bloklashi mumkin.
+
+
+## 17. Konsol operatori — ANIQ CHEKLANGAN ORALIQ KONFIGURATSIYA
+
+> **HOLATI: ORALIQ (interim).** Bu bo'lim ADMIN-1.0 / RC darvozalarida
+> **o'lchangan** cheklovlarni qayd etadi. U «yetarli darajada xavfsiz» demaydi —
+> u **qaysi shartlarda** va **qaysi fazagacha** qabul qilinishi mumkinligini
+> aniq yozadi. Shartlardan birortasi buzilsa, konfiguratsiya **yaroqsiz**.
+
+### 17.1 Bugungi autentifikatsiya — nima BOR, nima YO'Q
+
+| | Holat | Manba |
+|---|---|---|
+| Kirish kredensiali | **BITTA UMUMIY** `VENDOR_ADMIN_KEY` | `admin.py` `_key_ok` |
+| Ikkinchi omil | **BITTA UMUMIY** TOTP siri | `admin.py` `_totp_ok`, `VENDOR_TOTP_SECRET` |
+| Production'da 2FA | **MAJBURIY** (sir yo'q bo'lsa 503) | `vendor_login`: `is_production and not vendor_2fa_on` |
+| Sessiya | imzolangan, bazada, **bekor qilinadigan**, standart 2 soat | `_mint_session`, `_session_row` |
+| Xom kalit avtorizatsiya sifatida | 2FA yoqilganda **QABUL QILINMAYDI** | `require_vendor` |
+| IP allowlist | production'da **MAJBURIY** | `_check_vendor_ip`, `security_config` |
+| **Nomli operator hisoblari** | **YO'Q** (model bor, simlanmagan) | `models/subscription.PlatformAdmin` |
+| **Shaxsiy audit atributsiyasi** | **YO'Q va DA'VO QILINMAYDI** | `GET /admin/audit` → `"attribution": "shared-key"` |
+
+⚠️ **Bu hujjat ham, kod ham «kim qildi» degan savolga javob BERMAYDI.** Audit
+izi faqat «konsoldan qilindi» deb da'vo qiladi va javobda buni **aniq
+e'lon qiladi**. Har qanday hisobot, shartnoma yoki siyosat hujjati
+«nomli operator autentifikatsiyasi bor» deb yozsa — u **NOTO'G'RI**.
+
+### 17.2 Tezlik cheklovi — O'LCHANGAN byudjet
+
+| Qatlam | Qiymat | Manba |
+|---|---|---|
+| Manba (IP) bo'yicha | **5 ta rad etilgan urinish / 900 s** | `_VENDOR_IP_TIER` |
+| Oqim bo'yicha (global) | 20 / 3600 s — **AMALDA ISHLAMAYDI** | `_VENDOR_FLOW_TIER` |
+| Baza ishlamasa | **FAIL-CLOSED (503)** | `_vendor_rate_check` |
+
+⚠️ **IKKI O'LCHANGAN OQIBAT, OCHIQ AYTILADI:**
+
+1. **`flow:vendor` qatlami O'LIK.** `_rate_record` repo bo'ylab FAQAT
+   `bucket_ip` bilan chaqiriladi, ya'ni `"flow:vendor"` chelagiga **hech kim
+   yozmaydi** va gard doim 0 sanaydi. Global 20/3600 s cheklovi **hech qachon
+   ishlamagan**. Bu ADMIN-1.0 dan OLDIN ham shunday edi va P0 uni
+   **o'zgartirmadi** (cheklov siyosatini o'zgartirish bu ishning doirasida
+   emas). Oqibati: tarqoq (ko'p IP li) hujum faqat IP qatlami bilan
+   cheklanadi.
+2. **Operator o'zini bloklashi MUMKIN.** 15 daqiqada 5 ta xato (noto'g'ri
+   OTP ham shunga kiradi) — va **o'z-o'zini tiklash yo'li YO'Q**: kutish
+   yoki bazadan `vendor_auth_attempts` ni tozalash kerak. Bu brauzer E2E
+   yurishida **haqiqatan yuz berdi** va spetsifikatsiya byudjetga
+   moslashtirildi (`e2e/vendor-portal.spec.ts`, 16-qadam izohi).
+
+### 17.3 Bu konfiguratsiya QABUL QILINADIGAN shartlar (hammasi SHART)
+
+1. **BITTA operator.** Kalit va TOTP sirini **faqat bitta inson** biladi.
+   Ikkinchi odam qo'shilishi — bu konfiguratsiyani **YAROQSIZ** qiladi,
+   chunki audit izi ularni **ajrata olmaydi**.
+2. **Nazorat qilinadigan hajm.** Savdogarlar soni qo'lda kuzatiladigan
+   darajada (§16 dagi qo'lda hisob-kitob bilan izchil).
+3. **IP allowlist production'da YOQILGAN** va ro'yxat operatorning
+   ish joyi bilan cheklangan.
+4. **Kredensial aylanishi** rejalashtirilgan: kalit yoki TOTP sirini
+   almashtirish BARCHA sessiyalarni bekor qiladi (`_session_key`).
+5. **Har bir destruktiv amal** (to'xtatish, yumshoq o'chirish) konsolda
+   audit izi qoldiradi va u **operator tomonidan davriy ko'rib chiqiladi**.
+
+### 17.4 Bu fazani TUGATADIGAN shart (P1)
+
+Ikkinchi operator qo'shilishidan **OLDIN** quyidagilar bajarilishi SHART:
+
+* `PlatformAdmin` nomli hisoblari **simlanadi** (model bor, marshrut yo'q);
+* har operatorga **alohida TOTP** siri;
+* `audit_log.actor_admin_id` to'ldiriladi (DB CHECK `ck_audit_sub_fields`
+  buni SUBSCRIPTION_* amallari uchun allaqachon **talab qiladi**);
+* `GET /admin/audit` javobidagi `"attribution"` qiymati `shared-key` dan
+  `named-admin` ga o'tadi va UI dagi ogohlantirish olib tashlanadi;
+* `flow:vendor` qatlami **tiriltiriladi** yoki ataylab olib tashlanadi —
+  o'lik gard qolishi mumkin emas.
+
+Shu ishlar bajarilmaguncha **ko'p operatorli faza BOSHLANMAYDI**.

@@ -400,9 +400,17 @@ def close_store(db: Session, owner: Employee, *, delete_self: bool = False,
     #     keyin `core/deps.py:37-39` do'kondagi HAR BIR xodimga HAR BIR
     #     marshrutda 401 beradi va ikki login yo'li ham rad etadi. Ya'ni bitta
     #     ega sherik egani ham, barcha administratorlarni ham chiqarib
-    #     yuborardi — kodda esa QAYTA OCHISH YO'LI YO'Q (butun repoda
-    #     `Company.deleted_at` NULL ga qaytarilmaydi), tasdiq ekrani esa
+    #     yuborardi — kodda esa QAYTA OCHISH YO'LI YO'Q, tasdiq ekrani esa
     #     sheriklar haqida hech narsa aytmaydi.
+    #
+    #     ⚠️  2026-10-29 YANGILANDI (ADMIN-1.0/P0-F). Endi repoda
+    #         `Company.deleted_at` ni NULL ga QAYTARADIGAN bitta joy BOR:
+    #         `api/v1/admin.admin_restore_company`. BU INVARIANTNI BUZMAYDI —
+    #         o'sha marshrut `status == CLOSED` bo'lgan (ya'ni AYNAN shu
+    #         funksiya yopgan) do'konni 409 bilan RAD etadi, chunki bu yerda
+    #         rozilik bergan xodimlar anonimlashtirilgan bo'lishi mumkin.
+    #         Vendor yumshoq o'chirishi esa `status` ga tegmaydi va tiklanadi.
+    #         Darvoza testi: `tests/test_admin_p0_console.py::test_P0F_5_*`.
     #
     #     POYGA YO'Q: `_active_peers(lock=True)` butun rol to'plamini `id`
     #     tartibida qulflaydi, yuqoridagi `hammasi` esa ijarachining BARCHA

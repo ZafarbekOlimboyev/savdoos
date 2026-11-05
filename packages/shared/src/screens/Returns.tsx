@@ -5,6 +5,7 @@ import { fmt } from "@/lib/format";
 import { useGet } from "@/components/ui";
 import { PrintStatus, useAutoPrint, usePrintDoc, type PrintTarget } from "@/components/PrintStatus";
 import { useT } from "@/lib/i18n";
+import { useBarcodeScanner } from "@/lib/useBarcodeScanner";
 
 interface RecentSale { id: string; receipt_no: string; sold_at: string; method: string; total: number }
 interface FoundItem { product_id: string; name: string; qty: number; returned?: number; returnable?: number; unit_price: number; barcode: string; barcodes?: string[] }
@@ -57,6 +58,16 @@ export function Returns() {
       const f = await get<Found>(`/sales/find?q=${encodeURIComponent(q)}`);
       if (lastQ.current !== q) return;
       setFound(f); setQty({}); setConfirmed({}); setScanVal(""); setScanErr(""); setDone(null); setQuery(""); setRefundMethod(f.method);
+      //  ⚠️  FOKUSNI BO'SHATAMIZ. Chek qidiruv maydonida `autoFocus` bor
+      //      (1-qadam: chek shtrix-kodini skanerlash AYNAN shu yerda ishlaydi).
+      //      Lekin chek TOPILGANDAN keyin fokus o'sha yerda qolsa, mahsulot
+      //      skani ham shu maydonga tushib `GET /sales/find?q=<barkod>` ga
+      //      aylanardi — ya'ni «chek topilmadi». Fokusni bo'shatsak umumiy
+      //      apparat-skaner yo'li ishga tushadi va 2-qadam skani
+      //      HECH QANDAY maydonni bosishni talab qilmaydi.
+      //      Bu «inputga doimiy fokus berish» workaround'ining TESKARISI:
+      //      fokus olinadi, berilmaydi.
+      (document.activeElement as HTMLElement | null)?.blur?.();
     } catch (e: any) {
       if (lastQ.current !== q) return;
       // 403 — chek BOR-YO'QLIGI noma'lum, xodimda sotuv hujjatini ko'rish ruxsati yo'q. «Chek
@@ -84,6 +95,24 @@ export function Returns() {
     setConfirmed((p) => ({ ...p, [idx]: true }));
     setScanErr(""); setScanVal("");
   }
+  // ── APPARAT SKANER (fokusdan mustaqil) ──────────────────────────────────
+  //  Ega haqiqiy skaner bilan o'lchadi: bu ekranda skan FAQAT ikki inputdan
+  //  birortasi fokusda bo'lganda ishlardi. Bu ekranning IKKI skan nishoni bor
+  //  va ular ARALASHTIRILMAYDI:
+  //    · 1-qadam (chek hali topilmagan) — qidiruv maydoni chek raqami/UID ni
+  //      kutadi (`GET /sales/find`). Mahsulot barkodi bu yerda MA'NOSIZ, shu
+  //      bois skan DA'VO QILINMAYDI (`enabled: false`) va `Enter` o'z ishini
+  //      bajaradi — chek qidirish oqimi buzilmaydi.
+  //    · 2-qadam (chek topilgan) — skan chek QATORINI topadi: aynan mavjud
+  //      `scanCode`, ya'ni yangi mantiq YARATILMAYDI (barcha barkodlar bo'yicha
+  //      aniq moslik, `returnable` chegarasi, tanilmasa ochiq xato).
+  //  ⚠️  SERVERGA HECH NARSA YOZILMAYDI: `scanCode` faqat mahalliy `qty` ni
+  //      oshiradi; `POST /returns` faqat operator «tasdiqlash» bosganda
+  //      (`confirm`) ketadi. Skan hech qanday pul/zaxira harakatini boshlamaydi.
+  //  ⚠️  `done` — qaytarish allaqachon yozilgan va chek ko'rsatilmoqda: bu
+  //      holatda skan tugallangan hujjatga qator qo'shmasin.
+  useBarcodeScanner({ onScan: scanCode, enabled: !!found && !done });
+
   function bump(i: number, d: number, max: number) {
     setQty((p) => ({ ...p, [i]: Math.max(0, Math.min(max, (p[i] || 0) + d)) }));
   }
@@ -227,7 +256,7 @@ export function Returns() {
                       </div>
                       <div style={{ display: "flex", alignItems: "center", gap: 2, background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 9, padding: 2 }}>
                         <button onClick={() => bump(i, -1, capOf(it))} style={{ width: 28, height: 28, border: "none", background: "none", cursor: "pointer", color: "var(--text3)", borderRadius: 7, fontSize: 16 }}>−</button>
-                        <span style={{ minWidth: 28, textAlign: "center", fontSize: 14, fontWeight: 700, color: q > 0 ? "var(--danger)" : "var(--faint)" }}>{q}</span>
+                        <span data-testid={`ret-qty-${i}`} style={{ minWidth: 28, textAlign: "center", fontSize: 14, fontWeight: 700, color: q > 0 ? "var(--danger)" : "var(--faint)" }}>{q}</span>
                         <button onClick={() => (hasBc ? scanCode(it.barcode) : bump(i, 1, capOf(it)))} disabled={capOf(it) <= 0} style={{ height: 28, padding: hasBc ? "0 10px" : 0, width: hasBc ? "auto" : 28, border: "none", background: capOf(it) > 0 ? "var(--accent-soft)" : "var(--surface)", cursor: capOf(it) > 0 ? "pointer" : "default", color: "var(--accent-strong)", borderRadius: 7, fontSize: 13, fontWeight: 600, display: "flex", alignItems: "center", gap: 5, opacity: capOf(it) > 0 ? 1 : 0.5 }}>{hasBc ? t("returns.scanBtn") : "+"}</button>
                       </div>
                       <div style={{ width: 96, textAlign: "right", fontSize: 14, fontWeight: 700, color: q > 0 ? "var(--danger)" : "var(--faint)" }} className="tabular">{q > 0 ? "−" + fmt(q * it.unit_price) : "0"}</div>

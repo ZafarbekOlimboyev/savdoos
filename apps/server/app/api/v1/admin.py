@@ -19,6 +19,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
+from app.core import ratelimit as RL
 from app.core.config import settings
 from app.core.net import client_ip
 from app.core.password_policy import enforce_password_policy
@@ -30,6 +31,7 @@ from app.models.enums import SaleStatus
 from app.models.org import Branch, Company
 from app.models.sales import Sale
 from app.models.settings import PaymentMethod, Setting
+from app.models.sync import AuditLog
 from app.models.vendor import VendorAuthAttempt, VendorSession
 
 router = APIRouter(prefix="/admin", tags=["admin"])
@@ -169,7 +171,12 @@ def _vendor_rate_check(db, request: Request) -> str:
     shuning uchun himoyani o'lchay olmagan holatda kirishga ruxsat berilmaydi.
     Bu ataylab: jimgina fail-open bu yerda butun tizimni ochib qo'yardi."""
     ip = _source_ip(request) or "unknown"
-    bucket_ip = f"ip:{ip}"
+    #  ⚠️  IP CHELAGI KALITLANGAN (S1-F9F). Ilgari `f"ip:{ip}"` xom manzilni
+    #      `vendor_auth_attempts.bucket` ga yozardi — va u jadvalda TOZALASH
+    #      KODI UMUMAN YO'Q, ya'ni qator MUDDATSIZ qolardi (sabab va o'lchov:
+    #      `core/ratelimit.ip_bucket` izohi). Chelak faqat TENGLIK bilan
+    #      solishtirilgani uchun cheklov xulqi O'ZGARMAYDI.
+    bucket_ip = RL.ip_bucket("ip", ip)
     try:
         _rate_guard(db, bucket_ip, _VENDOR_IP_TIER)
         _rate_guard(db, "flow:vendor", _VENDOR_FLOW_TIER)
@@ -1065,3 +1072,218 @@ def admin_seed_demo(company_id: str, data: SeedDemoIn, _: bool = Depends(require
     from app.services.demo_seed import seed_chunk
     res = seed_chunk(db, c, data.days_from, data.days_to, setup=data.setup, finalize=data.finalize)
     return {"ok": True, **res}
+
+
+# ═══════════════ ADMIN-1.0 / P0-E, P0-F — TIKLASH VA OPERATOR AUDITI ═══════
+#
+# ⚠️  NEGA BU BO'LIM. ADMIN-1.0 ko'rigi ikki amaliy bo'shliqni O'LCHADI:
+#
+#       P0-F  `DELETE /companies/{id}` YUMSHOQ o'chiradi va «tiklash mumkin»
+#             deb yozilgan, LEKIN tiklash yo'li UMUMAN YO'Q EDI: do'kon
+#             ro'yxati `deleted_at.is_(None)` bo'yicha filtrlaydi, ya'ni
+#             o'chirilgan do'kon konsolda KO'RINMAY QOLADI va unga qaytish
+#             uchun hech qanday autentifikatsiyalangan sirt qolmaydi.
+#             Operator uchun bu AMALDA qaytarib bo'lmaydigan amal edi.
+#
+#       P0-E  Vendor konsoli AUDIT YOZADI (`audit_log(db, None, ...)` — 8 joy),
+#             lekin uni O'QISH yo'li yo'q edi. Mijoz endpointi
+#             (`GET /api/v1/audit`) bu qatorlarni ATAYLAB ko'rsatmaydi: u
+#             `INNER JOIN employees ON employees.id = audit_log.actor_id`
+#             ishlatadi, aktorsiz qator esa JOIN'dan o'tmaydi. U yerni
+#             LEFT JOIN ga aylantirish IJARACHILAR ARO SIZISH bo'lardi
+#             (`api/v1/audit.py` izohi buni yozib qo'ygan) — shu bois bu
+#             yerda ALOHIDA, vendor-ruxsatli o'qish sirti qo'shiladi.
+
+#: Vendor konsoli YOZADIGAN audit entity'lari — YOPIQ to'plam.
+#:
+#: ⚠️  NEGA YOPIQ. `audit_log` da `company_id` ustuni YO'Q (`models/sync.py`),
+#:     ya'ni «bu qator qaysi ijarachiniki» savoliga javob beradigan dalil
+#:     faqat `entity` + `entity_id`. Aktorsiz qator yozadigan YANA BIR joy bor
+#:     va u vendor EMAS: `api/v1/catalog_v2.py` ning katalog reset'i (mijoz
+#:     o'zi boshlaydi). Filtr `actor_id IS NULL` bilan YOLG'IZ qoldirilsa, u
+#:     mijozning katalog amalini vendor amali deb ko'rsatardi.
+_VENDOR_AUDIT_ENTITIES = ("vendor_session", "company", "demo_history_finalize")
+
+
+@router.get("/deleted-companies")
+def admin_deleted_companies(_: bool = Depends(require_vendor), db: Session = Depends(get_db)):
+    """YUMSHOQ o'chirilgan do'konlar — tiklash uchun YAGONA ko'rinish sirti.
+
+    ⚠️  NEGA ALOHIDA MARSHRUT, NEGA `GET /companies` ga `?deleted=1` EMAS:
+        `/companies` javobi mijoz (portal) tomonda KPI va jadvalni quradi;
+        unga shart bilan boshqa to'plam qaytarish o'sha shartnomani ikkiga
+        bo'lardi. Va NEGA `/companies/deleted` EMAS: u `/companies/{id}` bilan
+        yo'l to'qnashuviga tushib, e'lon TARTIBIGA bog'liq bo'lib qolardi.
+    """
+    rows = (db.query(Company)
+            .filter(Company.deleted_at.isnot(None))
+            .order_by(Company.deleted_at.desc())
+            .all())
+    return {"companies": [{
+        "id": str(c.id), "name": c.name, "code": c.code, "currency": c.currency,
+        "created_at": c.created_at.isoformat() if c.created_at else None,
+        "deleted_at": c.deleted_at.isoformat() if c.deleted_at else None,
+        #  Kod BAND bo'lsa tiklash RAD etiladi — operator buni OLDINDAN ko'radi.
+        "code_taken": bool(db.query(Company.id).filter(
+            Company.code == c.code, Company.deleted_at.is_(None)).first()),
+        #  ⚠️  EGA O'ZI YOPGANMI — tiklash TAQIQLANADI (`admin_restore_company`
+        #      izohi). Operator buni ro'yxatda KO'RADI va tugma berilmaydi.
+        "closed_by_owner": _ega_yopganmi(c),
+    } for c in rows]}
+
+
+def _ega_yopganmi(c) -> bool:
+    """Do'kon EGA tomonidan yopilganmi (vendor yumshoq o'chirishi EMAS).
+
+    ⚠️  MEZON MANBADAN O'LCHANGAN, taxmin EMAS:
+          · vendor `admin_delete_company` FAQAT `deleted_at` yozadi va
+            `status` ga UMUMAN tegmaydi;
+          · `services/account_deletion.close_store` esa `deleted_at` BILAN
+            BIRGA `status = CompanyStatus.CLOSED` yozadi (`:462-463`).
+        Ya'ni `status == CLOSED` — yopishning YAGONA ishonchli izi.
+
+    ⚠️  `status` NULL bo'lishi MUMKIN (eski tenantlar) — `models/org.py`
+        «Kod NULL ni ACTIVE deb o'qiydi» deydi. Shu bois tekshiruv AYNIQ
+        `CLOSED` ga qaraydi, `!= ACTIVE` ga EMAS: aks holda eski NULL li
+        vendor o'chirishi ham «ega yopgan» deb RAD etilardi (fail-closed
+        emas, shunchaki NOTO'G'RI).
+    """
+    from app.models.enums import CompanyStatus
+    return (c.status or "") == CompanyStatus.CLOSED.value
+
+
+@router.post("/companies/{company_id}/restore")
+def admin_restore_company(company_id: str, _: bool = Depends(require_vendor),
+                          db: Session = Depends(get_db)):
+    """YUMSHOQ o'chirishni QAYTARADI: `deleted_at = NULL`, kirish qayta ochiladi.
+
+    ⚠️  KOD TO'QNASHUVI DARVOZASI (fail-closed). `_provision_tenant` band
+        kodni `Company.code == code AND deleted_at IS NULL` bilan tekshiradi,
+        ya'ni do'kon o'chirilgandan KEYIN O'SHA kod bilan YANGI do'kon
+        ochilishi mumkin. Tiklash shundan keyin bajarilsa, bazada AYNI kodli
+        IKKI TIRIK do'kon qolardi — va `reset_password` ning
+        `company_code` yo'li ularning BIRINI (`first()`) tanlab, operator
+        BOSHQASINI nazarda tutgan bo'lsa ham o'sha do'konning egasiga parol
+        o'rnatardi. Shu bois bu holat 409 bilan RAD etiladi.
+
+    ⚠️⚠️  EGA O'ZI YOPGAN DO'KON TIKLANMAYDI (mustaqil ko'rik topdi).
+        `Company.deleted_at` ni IKKI butunlay boshqa yo'l yozadi:
+
+          1. VENDOR yumshoq o'chirishi (`admin_delete_company`) — FAQAT
+             `deleted_at`. Xodimlarga TEGMAYDI, ataylab QAYTARILADIGAN.
+          2. EGA O'ZI yopishi (`auth.close_own_store` ->
+             `services/account_deletion.close_store`) — `deleted_at` VA
+             `status = CLOSED`, ustiga ROZILIK BERGAN xodimlar
+             ANONIMLASHTIRILADI, ega esa `delete_my_account: true` bilan O'Z
+             hisobini ham o'chirgan bo'lishi mumkin.
+
+        `origin/main` ikkinchisini ATAYLAB TERMINAL qilgan va `peers_present`
+        darvozasining YOZMA ASOSI aynan shu: «`Company.deleted_at` NULL ga
+        qaytarilmaydi» (`account_deletion.py:404`). Bu marshrut uni jim
+        buzsa, eng yomon holatda KIRA OLADIGAN HECH KIM QOLMAGAN tirik
+        ijarachi («zombi») paydo bo'lardi: egasi anonimlashtirilgan, paroli
+        o'chirilgan, lekin do'kon «tirik».
+
+        Shu bois: `status == CLOSED` -> 409. Bu holatni qaytarish TIKLASH
+        emas, ALOHIDA qaror (ega roziligi + kimni rahbar qilish) va u bu
+        yerda O'YLAB TOPILMAYDI.
+
+    ⚠️  BU AMAL JISMONIY PURGE EMAS va unga HECH QANDAY aloqasi yo'q
+        (`tools/tenant_purge` HOLD'da qoladi). Bu yerda FAQAT bitta ustun
+        qaytariladi; biznes ma'lumoti O'CHIRILMAGAN edi va TEGILMAYDI.
+    """
+    cid = _parse_cid(company_id)
+    c = db.get(Company, cid)
+    if not c:
+        raise HTTPException(404, "Do'kon topilmadi")
+    if c.deleted_at is None:
+        #  IDEMPOTENT EMAS, ATAYLAB: «tikladim» degan javob operatorga
+        #  o'chirilgan do'konni tikladim deb ko'rsatardi, holbuki u tirik edi.
+        raise HTTPException(409, "Bu do'kon o'chirilmagan — tiklashga hojat yo'q")
+    if _ega_yopganmi(c):
+        raise HTTPException(
+            409, "Bu do'konni EGASI o'zi yopgan (hisob o'chirish oqimi) — "
+                 "konsoldan tiklanmaydi. Yopish paytida rozilik bergan "
+                 "xodimlar anonimlashtirilgan va ega o'z hisobini "
+                 "o'chirgan bo'lishi mumkin, ya'ni tiklangan do'konga kira "
+                 "oladigan hech kim qolmasligi mumkin. Bu ALOHIDA qaror.")
+    clash = (db.query(Company)
+             .filter(Company.code == c.code, Company.deleted_at.is_(None),
+                     Company.id != c.id)
+             .first())
+    if clash:
+        raise HTTPException(
+            409, f"«{c.code}» kodi band — tiklashdan oldin yangi do'kon kodini "
+                 f"o'zgartiring (aks holda bir kodli ikki do'kon qoladi)")
+    c.deleted_at = None
+    from app.services.audit import log as audit_log
+    audit_log(db, None, "update", "company", cid,
+              before={"deleted": True}, after={"restored": True, "name": c.name})
+    #  ⚠️  POYGA: yuqoridagi `clash` tekshiruvi O'QISH-so'ng-YOZISH (check-then-act)
+    #      va qulf OLMAYDI. Ikki parallel tiklash yoki tiklash x yangi
+    #      provisioning oynasida haqiqiy himoya — `ux_companies_code` qisman
+    #      unikal indeksi. U ishga tushsa, ushlanmagan `IntegrityError` 500
+    #      bo'lib chiqardi; bu yerda u AYNI 409 ga aylantiriladi, ya'ni
+    #      shartnoma poygada ham bir xil qoladi.
+    from sqlalchemy.exc import IntegrityError
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(
+            409, f"«{c.code}» kodi band — tiklash bajarilmadi "
+                 f"(parallel so'rov bilan to'qnashuv)") from None
+    return {"ok": True, "restored": True, "id": str(c.id), "code": c.code}
+
+
+@router.get("/audit")
+def admin_audit(limit: int = 100, company_id: str | None = None,
+                _: bool = Depends(require_vendor), db: Session = Depends(get_db)):
+    """VENDOR konsolining o'z audit izi — faqat KONSOL yozgan qatorlar.
+
+    ⚠️  ATRIBUTSIYA CHEKLOVI, OCHIQ AYTILADI. Bugun konsolga kirish YAGONA
+        umumiy `VENDOR_ADMIN_KEY` + YAGONA TOTP siri bilan bo'ladi
+        (`_key_ok`, `_totp_ok`). Shu bois bu jurnal «qaysi ODAM qildi» degan
+        savolga javob BERMAYDI va bermasligi ham kerak: u faqat «konsoldan
+        qilindi» deb da'vo qiladi. Shaxsiy javobgarlik faqat NOMLI platforma
+        hisoblari bilan (`models/subscription.PlatformAdmin`) mumkin, va u
+        hali SIMLANMAGAN — bu P1 ishi, bu yerda O'YLAB TOPILMAYDI.
+        Hozir beriladigan yagona haqiqiy metadata — SO'ROV konteksti: sessiya
+        `login`/`logout` qatorlarida manba IP'si (`after.ip`).
+
+    ⚠️  `actor_id IS NULL` YOLG'IZ YETARLI EMAS — qarang
+        `_VENDOR_AUDIT_ENTITIES` izohi (mijozning katalog reset'i ham aktorsiz).
+
+    ⚠️  MIJOZ ENDPOINTI TEGILMAYDI. `GET /api/v1/audit` dagi INNER JOIN AYNAN
+        shu qatorlarni to'sib turadi va u O'ZGARTIRILMADI — tekshiruv:
+        `tests/test_admin_p0_console.py::test_P0E_mijoz_auditi_...`.
+    """
+    q = (db.query(AuditLog)
+         .filter(AuditLog.actor_id.is_(None),
+                 AuditLog.entity.in_(_VENDOR_AUDIT_ENTITIES))
+         .order_by(AuditLog.created_at.desc(), AuditLog.id.desc()))
+    if company_id:
+        q = q.filter(AuditLog.entity_id == _parse_cid(company_id))
+    rows = q.limit(min(max(limit, 1), 200)).all()
+    #  Do'kon nomlari — `entity_id` ni operator o'qiy oladigan qiymatga
+    #  aylantirish uchun (o'chirilganlar ham: tiklashdan oldin ko'rinishi kerak).
+    nomlar = {c.id: c.code for c in db.query(Company).all()}
+    return {"entries": [{
+        "id": r.id,
+        "at": r.created_at.isoformat() if r.created_at else None,
+        "action": r.action,
+        "entity": r.entity,
+        "entity_id": str(r.entity_id) if r.entity_id else None,
+        "company_code": nomlar.get(r.entity_id),
+        "before": r.before,
+        "after": r.after,
+        #  ⚠️  Qiymat EMAS, DA'VO: bu qator konsoldan yozilgan. Ism YO'Q —
+        #      yuqoridagi atributsiya cheklovi.
+        "actor": "vendor-console",
+        #  ⚠️  `returned` va `limit_applied` ALOHIDA: ilgari bu yerda
+        #      `"limit": len(rows)` bor edi va u nomi bilan «so'ralgan
+        #      chegara» deb o'qilardi, qiymati esa DOIM qaytgan qatorlar
+        #      soni edi — ya'ni «natija kesilganmi?» degan savolga javob
+        #      BERMAS edi va chalg'itardi.
+    } for r in rows], "attribution": "shared-key",
+        "returned": len(rows), "limit_applied": min(max(limit, 1), 200)}

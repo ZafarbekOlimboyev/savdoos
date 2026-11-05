@@ -289,7 +289,15 @@ def login_pin(data: LoginPin, request: Request, db: Session = Depends(get_db)):
     # IP qatlami GLOBAL (company_id=None) — do'kon aniqlanishidan OLDIN tekshiriladi.
     # IP aniqlanmasa kalit XODIMGA bog'lanadi: "bitta umumiy kalit" butun tizimni
     # bloklaydigan holatga aylanmasin (izoh: `_client_ip`).
-    ipk = f"pin:{ip}" if ip else f"pin:?:{data.employee_id}"
+    #  ⚠️  IP CHELAGI KALITLANGAN (S1-F9F). Ilgari bu yerda `f"pin:{ip}"` va
+    #      `f"pin:?:{data.employee_id}"` yozilardi — ya'ni MIJOZ IP MANZILI
+    #      (zaxira shoxda esa XODIM identifikatori) ochiq matnda
+    #      `auth_attempts` ga tushardi, qator esa `company_id=None` bo'lgani
+    #      uchun `tenant_purge` dan OMON QOLARDI (sabab va o'lchov:
+    #      `core/ratelimit.ip_bucket` izohi). Chelak faqat TENGLIK bilan
+    #      solishtirilgani uchun cheklov xulqi O'ZGARMAYDI.
+    ipk = (RL.ip_bucket("pin", ip) if ip
+           else RL.ip_bucket("pin:?", str(data.employee_id)))
     RL.guard(db, "ip", ipk, RL.IP_TIER)
 
     # XODIM qatlami. Ataylab xodim MAVJUDLIGIDAN QAT'IY NAZAR ishlaydi: aks holda
@@ -351,8 +359,18 @@ def login_password(data: LoginPassword, request: Request, db: Session = Depends(
     """Egа/admin login — telefon + parol. Telefon global noyob (parolli akkaunt uchun)."""
     phone = norm_phone(data.phone)
     ip = _client_ip(request)
-    # IP aniqlanmasa kalit telefonga bog'lanadi (global kalit bo'lmasin — `_client_ip`).
-    ipk = f"pw:{ip}" if ip else f"pw:?:{phone or '-'}"
+    #  ⚠️  HISOB CHELAGI KALITLANGAN (S1-F9A). Ilgari bu yerda `f"pw:{phone}"`
+    #      yozilardi — ya'ni ega TELEFONI ochiq matnda `auth_attempts` ga
+    #      tushardi, qator esa `company_id=None` bo'lgani uchun
+    #      `tenant_purge` dan OMON QOLARDI (sabab va o'lchov:
+    #      `core/ratelimit.account_bucket` izohi).
+    acctk = RL.account_bucket(phone)
+    #  IP aniqlanmasa kalit telefonga bog'lanadi (global kalit bo'lmasin —
+    #  `_client_ip`). Bu ZAXIRA yo'lda ham XOM raqam EMAS, kalitlangan qiymat
+    #  ishlatiladi: aks holda telefon `ip` o'lchoviga ham tushardi.
+    #  ⚠️  IP CHELAGI KALITLANGAN (S1-F9F) — ilgari `f"pw:{ip}"` xom manzilni
+    #      yozardi (sabab: `core/ratelimit.ip_bucket` izohi).
+    ipk = RL.ip_bucket("pw", ip) if ip else RL.ip_bucket("pw:?", acctk)
     if not phone:
         # ⚠️  YAGONA xato matni. Ilgari bu yerda BOSHQA matn qaytarardi va cheklov
         #     ham, bcrypt ham umuman ishlamasdi — ya'ni "raqamsiz telefon" javobi
@@ -360,7 +378,7 @@ def login_password(data: LoginPassword, request: Request, db: Session = Depends(
         raise HTTPException(401, _LOGIN_FAILED)
     # Hisob qatlami IP'dan MUSTAQIL — bitta telefonga tarqoq hujum ham bloklanadi.
     RL.guard(db, "ip", ipk, RL.IP_TIER)
-    RL.guard(db, "acct", f"pw:{phone}", RL.ACCT_TIER)
+    RL.guard(db, "acct", acctk, RL.ACCT_TIER)
     candidates = (
         db.query(Employee)
         .filter(
@@ -379,15 +397,15 @@ def login_password(data: LoginPassword, request: Request, db: Session = Depends(
                 break  # o'chirilgan do'kon — umumiy xato bilan yashiramiz
             if _is_suspended(db, e.company_id):
                 # to'g'ri parol tasdiqlandi — bloklashni tozalab, aniq sabab beramiz
-                RL.clear(db, [("ip", ipk, None), ("acct", f"pw:{phone}", None)])
+                RL.clear(db, [("ip", ipk, None), ("acct", acctk, None)])
                 raise HTTPException(403, _SUSPENDED_MSG)
-            RL.clear(db, [("ip", ipk, None), ("acct", f"pw:{phone}", None)])
+            RL.clear(db, [("ip", ipk, None), ("acct", acctk, None)])
             return _token(e, db)
     if not candidates:
         # Telefon ro'yxatda yo'q — bcrypt ishga tushmagan bo'lardi; javob vaqti ochib
         # qo'ymasligi uchun soxta qiyoslash qilamiz (timing enumeration'га qarshi).
         verify_password(data.password, _DUMMY_HASH)
-    RL.record(db, [("ip", ipk, None), ("acct", f"pw:{phone}", None)])
+    RL.record(db, [("ip", ipk, None), ("acct", acctk, None)])
     raise HTTPException(401, _LOGIN_FAILED)
 
 
@@ -565,7 +583,14 @@ def delete_own_account(data: AccountDeletionIn,
     from app.services import account_deletion as _AD
 
     ip = _client_ip(request)
-    ipk = f"del:{ip}" if ip else f"del:?:{emp.id}"
+    #  ⚠️  IP CHELAGI KALITLANGAN (ADMIN-1.0 / P0-A). Bu yo'l S1-F9F dan
+    #      KEYIN qo'shilgan, shu bois u yerda qamralmagan edi: ilgari
+    #      `f"del:{ip}"` xom manzilni, zaxira shoxi esa xodim UUID sini
+    #      `auth_attempts` ga yozardi (sabab: `core/ratelimit.ip_bucket`).
+    #      `del` namespace'i ATAYLAB alohida: hisob o'chirish chegarasi
+    #      oddiy login xatolari bilan BIRLASHMAYDI.
+    ipk = (RL.ip_bucket("del", ip) if ip
+           else RL.ip_bucket("del:?", str(emp.id)))
     RL.guard(db, "ip", ipk, RL.IP_TIER)
     RL.guard(db, "acct", f"del:{emp.id}", RL.ACCT_TIER)
 
@@ -761,7 +786,10 @@ def close_own_store(data: StoreClosureIn,
     from app.services import account_deletion as _AD
 
     ip = _client_ip(request)
-    ipk = f"close:{ip}" if ip else f"close:?:{emp.id}"
+    #  ⚠️  IP CHELAGI KALITLANGAN (ADMIN-1.0 / P0-A) — `del` yo'li bilan
+    #      AYNI sabab va AYNI naqsh; `close` namespace'i ham alohida.
+    ipk = (RL.ip_bucket("close", ip) if ip
+           else RL.ip_bucket("close:?", str(emp.id)))
     RL.guard(db, "ip", ipk, RL.IP_TIER)
     RL.guard(db, "acct", f"close:{emp.id}", RL.ACCT_TIER)
 

@@ -30,8 +30,9 @@ import { useAuth } from "@/store/auth";
 import { useNav } from "@/store/nav";
 import { useUpdate } from "@/store/update";
 import { CACHE, cacheGet } from "@/lib/offline";
-import { readPrefs } from "@/lib/prefs";
+import { MAX_LINE_WEIGHT_KG, readPrefs } from "@/lib/prefs";
 import { parseScaleBarcode, pluMatches } from "@/lib/scaleBarcode";
+import { useBarcodeScanner } from "@/lib/useBarcodeScanner";
 import { useT } from "@/lib/i18n";
 import { Modal } from "@/components/ui";
 import { PrintStatus, useAutoPrint, usePrintDoc, type PrintTarget } from "@/components/PrintStatus";
@@ -221,16 +222,47 @@ function posBars(uid: string) {
   return out;
 }
 
+// Eng katta ruxsat etilgan DONALI miqdor.
+// ⚠️  CHEGARA O'ZGARMADI — ilgari ham 99999 edi. Yagona o'zgarish: undan katta qiymat JIM
+//     QISQARTIRILMAYDI (pastdagi `commit`). Vazn chegarasi (`MAX_LINE_WEIGHT_KG`) BOSHQA
+//     o'lcham — vaznli qatorda bu maydon umuman ko'rsatilmaydi.
+const MAX_LINE_QTY = 99999;
+
 // QA CART-04: dona mahsulot miqdorini QO'LDA kiritish — ±1 stepper yonida tahrirlanadigan maydon.
-// Mahalliy `buf` bilan yozish tekis kechadi; blur/Enter'da absolyut miqdor saqlanadi (min 1, max 99999).
-function CartQty({ id, qty }: { id: string; qty: number }) {
+// Mahalliy `buf` bilan yozish tekis kechadi; blur/Enter'da absolyut miqdor saqlanadi
+// (min 1, max `MAX_LINE_QTY`).
+//
+// ⚠️  APPARAT SKANER XAVFI — haqiqiy nuqson, zond bilan O'LCHANGAN. Klaviatura-wedge skaner
+//     bu KLAVIATURA: fokus shu maydonda bo'lsa barkod raqamlari SHU YERGA yoziladi, skanerning
+//     yakuniy Enter'i esa `blur()` -> `commit()` ni ishga tushiradi. Ilgari `commit()` qiymatni
+//     JIMGINA qisqartirardi:
+//         parseInt("4780001234567") = 4 780 001 234 567  ->  Math.min(..., 99999)
+//     Savatda 99999 dona paydo bo'lardi — bu XATO TERISH kabi ko'rinadi (4.7e12 esa darhol
+//     ko'zga tashlanardi), ya'ni jim qisqartirish eng xavfli qismi edi. Oflayn yo'lda server
+//     zaxira gardi ham yordam bermaydi: `app/services/sales.py` dagi qoldiq gardi (QA WH-007)
+//     `and not honor_price_snapshot` bilan yozilgan, u esa FAQAT `/sync/push` (oflayn replay)
+//     uchun `True` beriladi (`app/api/v1/sync.py`) — ya'ni oflayn 99999 dona FLUSH'DA YOZILADI.
+//
+//     Shuning uchun chegaradan oshgan qiymat QISQARTIRILMAYDI — RAD etiladi: savat miqdori
+//     O'ZGARMAY qoladi va sabab ekranga chiqadi (`onReject`).
+//
+// ⚠️  BU FIX BARKODNI QO'LDA KIRITILGAN RAQAMDAN TO'LIQ AJRATMAYDI. `MAX_LINE_QTY` dan
+//     kichik barkod (masalan 4 xonali) hamon haqiqiy miqdor sifatida qabul qilinadi.
+//     Bu yerdagi yagona kafolat — JIM QISQARTIRISH YO'Q. Vaqt oralig'i yoki barkod
+//     uzunligiga asoslangan evristika ATAYLAB QO'SHILMAGAN (ishonchsiz va kassirni to'sadi).
+function CartQty({ id, qty, onReject }: { id: string; qty: number; onReject: () => void }) {
   const [buf, setBuf] = useState<string | null>(null);
   const setQty = useCart((s) => s.setQty);
   const delta = useCart((s) => s.delta);
+  //  Enter ham, ODDIY BLUR ham AYNAN shu yo'ldan o'tadi: `onKeyDown` Enter -> `blur()` -> `onBlur`.
   const commit = () => {
     if (buf !== null) {
       const n = parseInt(buf, 10);
-      if (Number.isFinite(n) && n > 0) setQty(id, Math.min(n, 99999)); // 0/bo'sh — o'zgarishsiz qoldirib tiklaymiz
+      if (Number.isFinite(n) && n > 0) {
+        if (n > MAX_LINE_QTY) onReject();   // RAD: `setQty` CHAQIRILMAYDI -> oldingi miqdor saqlanadi
+        else setQty(id, n);
+      }
+      // 0/bo'sh — o'zgarishsiz qoldirib tiklaymiz
     }
     setBuf(null);
   };
@@ -412,6 +444,25 @@ export function POSKassa() {
     // eslint-disable-next-line
   }, [cart.items.length, modal]);
 
+  // ── APPARAT SKANER: UMUMIY (fokusdan mustaqil) YO'L ──────────────────────
+  //  ROOT CAUSE (haqiqiy apparat bilan tasdiqlangan). Bu ekranda skanerning
+  //  YAGONA yo'li `pos-search` inputi edi: barkod buferi — uning `query`
+  //  state'i, terminator — uning `onKeyDown` i. Ya'ni skan FAQAT o'sha input
+  //  fokusda bo'lganda ishlardi. Ekran ochilganda esa hech narsa fokusda EMAS
+  //  (`autoFocus` yo'q, F-1 effekti esa mount'da ATAYLAB o'tkazib yuboradi) —
+  //  zarbalar `<body>` ga ketib JIM yo'qolardi.
+  //
+  //  Ushlash mantiqi endi `lib/useBarcodeScanner` da — BARCHA ekranlar uchun
+  //  bitta mexanizm (ekranma-ekran alohida wedge YOZILMAYDI). Bu ekran faqat
+  //  SEMANTIKANI beradi: topilgan kod savatga qo'shiladi.
+  //
+  //  `enabled`: vazn (kg) dialogi yoki to'lov oynasi ochiq bo'lsa savat skan
+  //  bilan QIMIRLAMAYDI — mavjud yorliq gardlari bilan AYNI qoida.
+  useBarcodeScanner({
+    onScan: (code) => addByScan(code, false),
+    enabled: !weigh && !modal,
+  });
+
   useEffect(() => {
     if (modal && prefs.qarz && customers.length === 0) {
       get<CustomerRow[]>("/customers").then(setCustomers).catch(() => {});
@@ -568,10 +619,17 @@ export function POSKassa() {
   });
   const previewId = "M-" + (1001 + customers.length);
 
-  function onScan(e: React.KeyboardEvent) {
-    if (e.key !== "Enter") return;
-    const term = query.trim();
-    if (!term) return;
+  // ── YAGONA SKAN RESOLVERI ────────────────────────────────────────────────
+  //  Ikki yo'l ham (F2 inputining `onScan` i va apparat-skaner tinglovchisi)
+  //  AYNAN shuni chaqiradi: ikkinchi barkod parseri ham, ikkinchi `cart.add`
+  //  chaqiruvi ham YARATILMAYDI. Ikki yo'l FOKUS bo'yicha O'ZARO INKOR
+  //  (`isEditableTarget`), shu bois bitta skan ikki marta ishlanishi MUMKIN EMAS.
+  //
+  //  `allowNameFallback` — `shown[0]` zaxirasi, FAQAT odamning QO'LDA qidiruvi
+  //  uchun (nom/artikul yozib Enter — mavjud va ataylab saqlanadigan UX).
+  //  Apparat skaner yo'lida DOIM `false`: tanilmagan barkod savatni MUTLAQO
+  //  qimirlatmasin, taxmin bilan «eng yaqin» mahsulot sotilmasin.
+  function addByScan(term: string, allowNameFallback: boolean): void {
     // Tarozi etiketkasi: 27 + PLU(5) + gramm(5) + EAN-13 nazorat(1) — YAGONA qoida
     // `lib/scaleBarcode.ts` da (server `GET /products/scan` ham AYNAN shu vektorlar bilan tekshiriladi).
     const scale = parseScaleBarcode(term);
@@ -593,16 +651,37 @@ export function POSKassa() {
       return;
     }
     const exact = products.find((p) => (p.barcodes || []).includes(term));
-    const hit = exact || shown[0];
-    if (hit) {
-      // QA PC-014: tarozi mahsuloti skaner/Enter yo'lida ham VAZN so'raydi (grid bilan bir xil) —
-      // aks holda 1 dona = 1 kg bo'lib, ±1 stepper bilan noto'g'ri sotilardi.
-      if (hit.is_weighted) { setWeigh(hit); setWeighVal(""); setQuery(""); return; }
-      cart.add({ id: hit.id, name: hit.name, price: hit.base_sell_price, article: hit.article_code });
-      bumpUsage(hit.id); setUsageTick((v) => v + 1);
-      setQuery("");
+    const hit = exact || (allowNameFallback ? shown[0] : undefined);
+    if (!hit) {
+      //  ⚠️  FAIL-LOUD. Skaner yo'lida tanilmagan barkod ILGARI JIMGINA
+      //      yo'qolardi (`if (hit)` — `else` yo'q edi): kassir skanerni ikki-uch
+      //      marta bosib, nima bo'lmaganini tushunmasdi. Savat QIMIRLAMAYDI,
+      //      lekin sabab KO'RINADI.
+      if (!allowNameFallback) setErr(t("pos.notFound"));
+      return;
     }
+    // QA PC-014: tarozi mahsuloti skaner/Enter yo'lida ham VAZN so'raydi (grid bilan bir xil) —
+    // aks holda 1 dona = 1 kg bo'lib, ±1 stepper bilan noto'g'ri sotilardi.
+    if (hit.is_weighted) { setWeigh(hit); setWeighVal(""); setQuery(""); return; }
+    cart.add({ id: hit.id, name: hit.name, price: hit.base_sell_price, article: hit.article_code });
+    bumpUsage(hit.id); setUsageTick((v) => v + 1);
+    setQuery("");
   }
+
+  function onScan(e: React.KeyboardEvent) {
+    if (e.key !== "Enter") return;
+    const term = query.trim();
+    if (!term) return;
+    //  ⚠️  `shown` KECHIKTIRILGAN `deferredQuery` dan hisoblanadi, `term` esa
+    //      JONLI `query`. Skan tez bo'lganda `shown` hali OLDINGI (bo'sh) so'rov
+    //      natijasi — ya'ni BUTUN katalog — va `shown[0]` zaxirasi kassir bexabar
+    //      BOSHQA mahsulotni sotib yuborardi (aynan shu xavf tarozi yo'lida
+    //      izohlangan, lekin oddiy barkod yo'lida OCHIQ qolgan edi). Zaxira endi
+    //      FAQAT kechiktirilgan qiymat jonlisiga YETIB OLGANDA ishlaydi — odam
+    //      yozib Enter bosganda doim shunday, tez skanda esa HECH QACHON.
+    addByScan(term, deferredQuery.trim() === term);
+  }
+
 
   async function finish() {
     setBusy(true);
@@ -953,7 +1032,7 @@ export function POSKassa() {
                             {it.qty} <span style={{ fontSize: 12, fontWeight: 600, color: "var(--muted)" }}>{t("unit.kg")}</span>
                           </div>
                         ) : (
-                          <CartQty id={it.id} qty={it.qty} />
+                          <CartQty id={it.id} qty={it.qty} onReject={() => setErr(t("pk.qtyTooBig", { max: MAX_LINE_QTY }))} />
                         )}
                       </div>
                       <span className="tabular" style={{ width: 120, flex: "none", textAlign: "right", fontSize: 15, fontWeight: 700, letterSpacing: "-0.02em" }}>{fmt(it.qty * it.price)}</span>
@@ -1181,8 +1260,21 @@ export function POSKassa() {
       {weigh && (() => {
         // 0.001 kg ga server qoidasi bilan — savat, ko'rinadigan summa, payload va chek BIR xil qty'da.
         const kg = kgOf(weighVal);
+        //  ⚠️  QATOR VAZNI CHEGARASI — SKANER XAVFSIZLIGI. Bu maydon `autoFocus`
+        //      va `onChange` raqamlarni qabul qiladi, ya'ni klaviatura-wedge
+        //      skaner barkodni VAZN deb yozardi: o'lchangan
+        //      `kgOf("4700000160204")` = 4 700 000 160 204, `decRound` tashlamaydi
+        //      va `cart.add` da chegara yo'q. Umumiy skaner yo'li yordam bera
+        //      OLMAYDI — u `enabled: !weigh` va `isEditableTarget` sabab chetga
+        //      chiqadi va `preventDefault` qilmaydi.
+        //  Chegara `lib/prefs` da (`MAX_LINE_WEIGHT_KG`) — sababi va
+        //  konfiguratsiya choki o'sha yerda izohlangan.
+        const tooHeavy = kg > MAX_LINE_WEIGHT_KG;
+        //  ⚠️  `addWeighed` YAGONA validatsiya nuqtasi: `Enter` ham, «Qo'shish»
+        //      tugmasi ham AYNAN shuni chaqiradi, shu bois ikki yo'l hech qachon
+        //      ajralib ketmaydi (ega talabi).
         const addWeighed = () => {
-          if (kg <= 0) return;
+          if (kg <= 0 || tooHeavy) return;
           cart.add({ id: weigh.id, name: weigh.name, price: weigh.base_sell_price, article: weigh.article_code, qty: kg, weighted: true });
           setWeigh(null); setWeighVal("");
         };
@@ -1197,9 +1289,15 @@ export function POSKassa() {
                 placeholder={`0.000 ${t("unit.kg")}`}
                 style={{ width: "100%", marginTop: 16, height: 54, borderRadius: 12, border: "1px solid var(--border)", background: "var(--surface)", textAlign: "center", fontSize: 24, fontWeight: 800, color: "var(--text)" }} />
               <div className="tabular" style={{ textAlign: "center", marginTop: 10, fontSize: 15, fontWeight: 700, color: kg > 0 ? "var(--text)" : "var(--faint)" }}>{fmt(Math.round(kg * weigh.base_sell_price + 1e-6))}</div>
+              {tooHeavy && (
+                <div data-testid="weigh-too-big" role="status"
+                  style={{ marginTop: 10, padding: "9px 12px", borderRadius: 10, background: "rgba(220,150,20,0.12)", color: "var(--warn)", fontSize: 12.5, fontWeight: 600, textAlign: "center", lineHeight: 1.4 }}>
+                  {t("pos.weightTooBig", { max: String(MAX_LINE_WEIGHT_KG) })}
+                </div>
+              )}
               <div style={{ display: "flex", gap: 10, marginTop: 18 }}>
                 <button onClick={() => { setWeigh(null); setWeighVal(""); }} style={{ flex: 1, height: 46, border: "1px solid var(--border)", background: "var(--surface)", borderRadius: 11, cursor: "pointer", fontWeight: 600, color: "var(--text)" }}>{t("common.cancel")}</button>
-                <button onClick={addWeighed} disabled={kg <= 0} style={{ flex: 1, height: 46, border: "none", background: kg > 0 ? A : "var(--border)", color: "#fff", borderRadius: 11, cursor: kg > 0 ? "pointer" : "default", fontWeight: 700 }}>{t("common.add")}</button>
+                <button onClick={addWeighed} disabled={kg <= 0 || tooHeavy} style={{ flex: 1, height: 46, border: "none", background: kg > 0 && !tooHeavy ? A : "var(--border)", color: "#fff", borderRadius: 11, cursor: kg > 0 && !tooHeavy ? "pointer" : "default", fontWeight: 700 }}>{t("common.add")}</button>
               </div>
             </div>
           </div>

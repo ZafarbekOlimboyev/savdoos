@@ -85,9 +85,18 @@
       <label>Vendor kaliti</label>
       <input id="vk" type="password" placeholder="X-Vendor-Key" autocomplete="off">
     </div>
-    <div class="field" id="otpRow" style="text-align:left;display:none">
-      <label>2FA kodi (Google Authenticator)</label>
-      <input id="otp" inputmode="numeric" maxlength="6" placeholder="123456" autocomplete="off">
+    <!-- P0-B: 2FA maydoni DOIM KO‘RINADI. Ilgari u `display:none` edi va
+         FAQAT server 401 matnida "otp"/"2fa" so‘zi uchrasa ochilardi. Ikki
+         oqibat o‘lchangan: (1) production operatori maydonni UMUMAN
+         ko‘rmasdi — kalit to‘g‘ri bo‘lsa ham kira olmasdi; (2) mijoz
+         serverning YAGONA 401 ini matn bo‘yicha ikkiga bo‘lib, "kalit
+         to‘g‘ri, faqat OTP xato" degan ORACLE yasardi. -->
+    <div class="field" id="otpRow" style="text-align:left">
+      <label for="otp">2FA kodi (Google Authenticator)</label>
+      <input id="otp" inputmode="numeric" autocomplete="one-time-code"
+             maxlength="6" pattern="[0-9]{6}" placeholder="123456">
+      <div class="muted" style="font-size:11.5px;margin-top:5px">
+        2FA sozlanmagan serverda bo‘sh qoldiring</div>
     </div>
     <div class="err" id="loginErr"></div>
     <button class="btn btn-primary" style="width:100%;height:48px" onclick="doLogin()">Kirish</button>
@@ -118,6 +127,34 @@
       </table>
       <div class="empty" id="compEmpty" style="display:none">Hali do'kon yo'q — "Yangi do'kon" bilan qo'shing</div>
     </div>
+    <!-- P0-F: O‘CHIRILGANLAR. `GET /companies` `deleted_at IS NULL` bo‘yicha
+         filtrlaydi, ya’ni yumshoq o‘chirilgan do‘kon konsolda UMUMAN
+         ko‘rinmasdi va «tiklash mumkin» da’vosi uchun hech qanday sirt
+         qolmasdi. Bo‘lim faqat qator bo‘lganda ko‘rinadi. -->
+    <div id="delWrap" style="display:none;margin-top:28px">
+      <div class="section-h"><h2>O‘chirilganlar</h2><span class="muted" id="delCount"></span></div>
+      <div class="card" style="overflow:hidden">
+        <table><thead><tr><th>Do‘kon</th><th>O‘chirilgan</th><th style="text-align:right">Amal</th></tr></thead>
+        <tbody id="delRows"></tbody></table>
+      </div>
+    </div>
+
+    <!-- P0-E: KONSOL AUDIT IZI. Vendor amallari `audit_log` ga AKTORSIZ
+         yoziladi va mijoz endpointi (`GET /api/v1/audit`) ularni ATAYLAB
+         ko‘rsatmaydi (INNER JOIN `employees`) — uni LEFT JOIN qilish
+         ijarachilar aro sizish bo‘lardi. Shu bois alohida vendor sirti. -->
+    <div style="margin-top:28px">
+      <div class="section-h"><h2>Konsol audit izi</h2>
+        <span class="row" style="gap:10px">
+          <span class="muted" style="font-size:12px" id="auditNote"></span>
+          <button class="btn btn-ghost btn-sm" onclick="loadAudit()">Yangilash</button>
+        </span></div>
+      <div class="card" style="overflow:hidden">
+        <table><thead><tr><th>Vaqt</th><th>Amal</th><th>Do‘kon</th><th>Tafsilot</th></tr></thead>
+        <tbody id="auditRows"><tr><td class="muted">"Yangilash" bilan yuklang</td></tr></tbody></table>
+      </div>
+    </div>
+
   </div>
 </div>
 
@@ -136,15 +173,68 @@
         <div class="field"><label>Ega ismi</label><input id="p_owner" placeholder="Ism Familiya"></div>
         <div class="field"><label>Ega telefoni (login)</label><input id="p_phone" placeholder="+998 90 123 45 67"></div>
       </div>
+      <!-- P0-C: SERVER QOIDASI bilan paritet. Yorliq ilgari «kamida 6» deb
+           yozilgan edi, server esa `core/password_policy.MIN_LEN = 12` ni
+           majburlaydi -> operator 6 belgili parol kiritib 400 olardi. -->
       <div class="grid2">
-        <div class="field"><label>Parol (kamida 6)</label><input id="p_pw" type="text" placeholder="parol"></div>
-        <div class="field"><label>Tarif</label>
+        <div class="field"><label for="p_pw">Parol (kamida 12 belgi)</label>
+          <input id="p_pw" type="text" placeholder="masalan: Toshkent-Bahor-2026"
+                 autocomplete="off" oninput="pwHint()">
+          <div class="muted" id="p_pwHint" style="font-size:11.5px;margin-top:5px">
+            0 / 12 belgi</div>
+        </div>
+        <div class="field"><label for="p_plan">Tarif</label>
           <select id="p_plan"><option value="start">Start</option><option value="start+">Start+</option><option value="business">Business</option></select>
         </div>
       </div>
+      <!-- P0-C: FILIAL NOMI va VAQT MINTAQASI. Ikkisi ham serverda ALLAQACHON
+           qabul qilinardi (`ProvisionIn.branch_name`, `.timezone`), lekin bu
+           shakl ularni YUBORMASDI — ya’ni har do‘kon «Asosiy filial» +
+           `Asia/Tashkent` bo‘lib qolardi va +6 (Bishkek) do‘konning kunlik
+           hisobotlari 1 soat siljirdi (QA SB-004).
+           Ro‘yxat `api/v1/reports._TZ_OFFSETS` dan — server AYNAN shu
+           to‘plamni qabul qiladi (`_provision_tenant`: `_tz not in _TZS` -> 400). -->
       <div class="grid2">
-        <div class="field"><label>Valyuta</label><input id="p_cur" value="UZS" maxlength="3"></div>
-        <div class="field"><label>PIN (ixtiyoriy, 4 raqam)</label><input id="p_pin" placeholder="1234" maxlength="8"></div>
+        <div class="field"><label for="p_branch">Asosiy filial nomi</label>
+          <input id="p_branch" placeholder="Asosiy filial"></div>
+        <div class="field"><label for="p_tz">Vaqt mintaqasi (hisobot kuni)</label>
+          <select id="p_tz">
+            <option value="Asia/Tashkent">Asia/Tashkent (+5)</option>
+            <option value="Asia/Samarkand">Asia/Samarkand (+5)</option>
+            <option value="Asia/Bishkek">Asia/Bishkek (+6)</option>
+            <option value="Asia/Almaty">Asia/Almaty (+6)</option>
+            <option value="Asia/Dushanbe">Asia/Dushanbe (+5)</option>
+            <option value="Asia/Ashgabat">Asia/Ashgabat (+5)</option>
+            <option value="Asia/Qyzylorda">Asia/Qyzylorda (+5)</option>
+            <option value="Asia/Yekaterinburg">Asia/Yekaterinburg (+5)</option>
+            <option value="Asia/Novosibirsk">Asia/Novosibirsk (+7)</option>
+            <option value="Asia/Baku">Asia/Baku (+4)</option>
+            <option value="Asia/Tbilisi">Asia/Tbilisi (+4)</option>
+            <option value="Asia/Yerevan">Asia/Yerevan (+4)</option>
+            <option value="Europe/Moscow">Europe/Moscow (+3)</option>
+          </select></div>
+      </div>
+      <!-- P0-C: VALYUTA — erkin matn EMAS. `receipt/format.ts` ning
+           `BY_CURRENCY` jadvalida FAQAT UZS va KGS bor; boshqa kod chekda
+           xom ISO kodi bo‘lib chiqadi (yorliq O‘YLAB TOPILMAYDI — bu
+           ataylab). Erkin maydon shu bois «EUR» kabi qiymatni jim
+           qabul qilardi. -->
+      <div class="grid2">
+        <div class="field"><label for="p_cur">Valyuta</label>
+          <select id="p_cur">
+            <option value="UZS">UZS — so‘m</option>
+            <option value="KGS">KGS — сом</option>
+          </select></div>
+        <!-- P0-C: EGA PIN maydoni OLIB TASHLANDI. `auth._pin_login_allowed`
+             `ega`/`administrator` uchun PIN yo‘lini QAT’IY to‘sadi
+             (`core/deps.FULL_ACCESS_ROLES`), ya’ni bu yerda yozilgan PIN
+             HECH QACHON ishlamaydi — maydon operatorni chalg‘itardi.
+             Kassir PIN’i ilovaning Xodimlar ekranida beriladi
+             (`POST /api/v1/employees`). -->
+        <div class="field"><label>&nbsp;</label>
+          <div class="muted" style="font-size:11.5px;line-height:1.45">
+            Kassir PIN’lari ilovada — Xodimlar ekranida beriladi.
+            Ega PIN bilan kirmaydi (telefon + parol).</div></div>
       </div>
       <div class="err" id="provErr"></div>
       <div class="row" style="justify-content:flex-end;margin-top:8px">
@@ -186,16 +276,42 @@ async function doLogin(){
     const r=await fetch('/api/v1/admin/login',{method:'POST',headers:{'Content-Type':'application/json','X-Vendor-Key':k},body:JSON.stringify({otp})});
     const d=await r.json().catch(()=>({}));
     if(!r.ok){
-      const msg=(d&&d.detail)?String(d.detail):'Kirish xatosi';
-      $('loginErr').textContent=msg;
-      if(/otp|2fa/i.test(msg)){ $('otpRow').style.display='block'; if($('otp'))$('otp').focus(); }
+      // P0-B: xabar SERVERDAN kelganidek ko‘rsatiladi va PARSE QILINMAYDI.
+      // Server ataylab YAGONA 401 beradi (`admin.py` `_vendor_denied`) —
+      // uni matn bo‘yicha tasniflash o‘sha qarorni mijozda buzardi.
+      $('loginErr').textContent=(d&&d.detail)?String(d.detail):'Kirish xatosi';
+      $('otp').value=''; $('otp').focus();
       return;
     }
     SESSION=d.session; sessionStorage.setItem('vs',SESSION);
     showApp();
   }catch(e){ $('loginErr').textContent='Server bilan aloqa yo‘q'; }
 }
-function logout(){sessionStorage.removeItem('vs');SESSION='';$('app').style.display='none';$('login').style.display='flex';$('vk').value='';if($('otp')){$('otp').value='';$('otpRow').style.display='none';}$('loginErr').textContent=''}
+async function logout(){
+  const eski=SESSION;
+  // P0-D: bir martalik kredensial xotirada qolmasin.
+  credClear();
+  // P0-B: `otpRow` YASHIRILMAYDI — u endi doimiy maydon.
+  sessionStorage.removeItem('vs');SESSION='';
+  $('app').style.display='none';$('login').style.display='flex';
+  $('vk').value='';if($('otp')){$('otp').value='';}
+  $('loginErr').textContent='';
+  // P0-B: SESSIYA SERVER TOMONDA BEKOR QILINADI.
+  //
+  // O'LCHANGAN NUQSON: ilgari bu funksiya faqat mijoz holatini tozalardi va
+  // `vendor_sessions` qatori TEGILMASDI — ya'ni «chiqdim» dan keyin ham
+  // AYNI token to'liq muddati davomida (standart 2 soat) ishlardi.
+  // `POST /admin/logout` `revoked_at` ni o'rnatadi va `_session_row` imzo
+  // to'g'ri bo'lsa ham bekor qilingan qatorni RAD etadi.
+  //
+  // `api()` ORQALI EMAS, ataylab: `api()` 401 da yana `logout()` ni
+  // chaqiradi — ya'ni rekursiya bo'lardi. Xato YUTILADI: chiqish mijoz
+  // tomonda HAR HOLDA bajarilgan bo'lishi kerak.
+  if(eski){
+    try{ await fetch('/api/v1/admin/logout',
+      {method:'POST',headers:{'X-Vendor-Session':eski}}); }catch(e){ /* ignore */ }
+  }
+}
 
 function showApp(){$('login').style.display='none';$('app').style.display='block';load()}
 
@@ -227,36 +343,130 @@ async function load(){
         <td class="muted">${day(c.last_sale)}</td>
       </tr>`;
     }).join('');
+    // P0-F: o‘chirilganlar ro‘yxati (bo‘sh bo‘lsa yashirin).
+    // ⚠️  `try` ICHIDA, ataylab: ilgari u `catch` dan KEYIN, shartsiz
+    //     chaqirilardi. `api()` 401 da `logout()` qilib `SESSION=''`
+    //     qo‘yadi, ya’ni keyingi `loadDeleted()` sarlavhaSIZ ketib yana
+    //     401 olardi — har sessiya tugashi vendor cheklov byudjetini
+    //     IKKI BARAVAR yeb, hech qanday foyda bermasdi.
+    await loadDeleted();
   }catch(e){ if(e.message!=='401') alert('Yuklashda xato: '+e.message); }
 }
 
 function openOverlay(id){$(id).classList.add('on')}
 function closeOverlay(id){$(id).classList.remove('on')}
 
+function pwHint(){
+  const n=$('p_pw').value.length;
+  $('p_pwHint').textContent=n+' / 12 belgi'+(n&&n<12?' — hali qisqa':'');
+  $('p_pwHint').style.color=(n>=12||!n)?'var(--muted)':'var(--warn)';
+}
+
 function openProvision(){
+  credClear();
   $('provDone').innerHTML='';$('provForm').style.display='block';$('provErr').textContent='';
-  ['p_name','p_code','p_owner','p_phone','p_pw','p_pin'].forEach(i=>$(i).value='');
-  $('p_cur').value='UZS';$('p_plan').value='start';
+  ['p_name','p_code','p_owner','p_phone','p_pw','p_branch'].forEach(i=>$(i).value='');
+  $('p_cur').value='UZS';$('p_plan').value='start';$('p_tz').value='Asia/Tashkent';
+  pwHint();
   openOverlay('ovProvision');
 }
+
 async function submitProvision(){
+  const pw=$('p_pw').value;
+  // P0-C: MIJOZ TOMONDA ham AYNI chegara (server qoidasi `MIN_LEN=12`).
+  // Ataylab FAQAT uzunlik: qolgan shartlar (trivial ro‘yxat, 72 bayt,
+  // 4 xil belgi) SERVERDA — ularni ikkinchi nusxada yozish qoidalar vaqt
+  // o‘tib bir-biridan uzilib ketadigan naqsh bo‘lardi.
+  if(pw.length<12){ $('provErr').textContent='Parol kamida 12 belgi bo\u2018lishi kerak'; $('p_pw').focus(); return }
   const body={
     company_name:$('p_name').value.trim(), company_code:$('p_code').value.trim().toLowerCase(),
     owner_name:$('p_owner').value.trim(), owner_phone:$('p_phone').value.trim(),
-    owner_password:$('p_pw').value, plan:$('p_plan').value,
-    currency:($('p_cur').value.trim()||'UZS').toUpperCase(),
+    owner_password:pw, plan:$('p_plan').value,
+    currency:$('p_cur').value, branch_name:($('p_branch').value.trim()||'Asosiy filial'),
+    timezone:$('p_tz').value,
   };
-  const pin=$('p_pin').value.trim(); if(pin) body.owner_pin=pin;
   $('provErr').textContent='';$('provBtn').disabled=true;
   try{
     const r=await api('/companies',{method:'POST',body:JSON.stringify(body)});
     $('provForm').style.display='none';
-    $('provDone').innerHTML=`<div class="ok-banner">✓ Do'kon ochildi!<br>
-      <b>Kod:</b> ${esc(r.company_code)} &nbsp; <b>Login:</b> ${esc(r.owner_phone)} &nbsp; <b>Parol:</b> ${esc(body.owner_password)}<br>
-      <span class="muted">Egaга shu login/parolни bering. Ilova (POS/Manager/mobil) shu bilan kiradi.</span></div>
-      <div class="row" style="justify-content:flex-end"><button class="btn btn-primary" onclick="closeOverlay('ovProvision');load()">Yopish</button></div>`;
+    // P0-D: BIR MARTALIK KREDENSIAL TOPSHIRISHI. Parol endi BANNERGA
+    // yozilmaydi: u faqat xotiradagi `CRED` da turadi, 5 soniyaga
+    // ko‘rsatiladi yoki buferga ko‘chiriladi, va `credClear()` uni
+    // o‘chiradi. Ilgari u DOM da modal yopilguncha turardi (yelka orqali
+    // o‘qish, skrinshot, ekran yozuvi).
+    credSet(pw);
+    $('provDone').innerHTML=`<div class="ok-banner">✓ Do‘kon ochildi!<br>
+      <b>Kod:</b> ${esc(r.company_code)} &nbsp; <b>Login:</b> ${esc(r.owner_phone)}<br>
+      <span class="muted">Parol ekranda ko‘rsatilmaydi — nusxalang yoki
+      qisqa vaqt ko‘ring, so‘ng egaga XAVFSIZ kanal bilan bering.</span></div>
+      ${credPanel()}
+      <div class="row" style="justify-content:flex-end;margin-top:10px">
+        <button class="btn btn-primary" onclick="credClear();closeOverlay('ovProvision');load()">Yopish va tozalash</button></div>`;
+    $('p_pw').value='';
   }catch(e){ $('provErr').textContent=e.message; }
   finally{ $('provBtn').disabled=false; }
+}
+
+// ══ P0-D) Bir martalik kredensial topshirishi ══════════════════
+//
+// NEGA XOTIRADA, NEGA `sessionStorage` EMAS: `sessionStorage` tab yopilguncha
+// (va F5 dan keyin ham) saqlanadi va DevTools’da ochiq turadi. Bu qiymat
+// operatorga BIR MARTA kerak, shu bois u sahifa o‘zgaruvchisida turadi va
+// aniq o‘chiriladi. `logout()` ham tozalaydi.
+let CRED=null, CRED_T=null, CRED_COPIED=false;
+function credSet(v){ credClear(); CRED=v; }
+function credClear(){
+  // ⚠️  BUFER (clipboard) HAQIDA HALOL GAP: bu funksiya SAHIFA holatini
+  //     tozalaydi. Agar operator «nusxalash» ni bosgan bo‘lsa, parol OS
+  //     buferida qoladi va brauzer uni ishonchli o‘chira OLMAYDI (yozish
+  //     foydalanuvchi harakatiga bog‘liq, o‘qish esa umuman ruxsat
+  //     etilmaydi). Quyida ENG YAXSHI HARAKAT bilan ustiga yoziladi;
+  //     muvaffaqiyat KAFOLATLANMAYDI va UI shuni aytadi.
+  const bor = CRED !== null;
+  CRED=null;
+  if(CRED_T){clearTimeout(CRED_T);CRED_T=null}
+  const p=$('credPeek'); if(p){p.textContent='';}
+  if(bor && CRED_COPIED){
+    try{ navigator.clipboard && navigator.clipboard.writeText(''); }catch(e){ /* ignore */ }
+    CRED_COPIED=false;
+  }
+}
+function credPanel(){
+  return `<div class="row" style="gap:8px;flex-wrap:wrap">
+    <button class="btn btn-ghost btn-sm" onclick="credCopy()">⧉ Parolni nusxalash</button>
+    <button class="btn btn-ghost btn-sm" onclick="credReveal()">◉ 5 soniya ko‘rsatish</button>
+    <span class="muted" id="credPeek" style="font-family:ui-monospace,Menlo,Consolas,monospace;font-size:13px"></span>
+  </div>`;
+}
+function credReveal(){
+  if(!CRED){ $('credPeek').textContent='— tozalangan'; return }
+  $('credPeek').textContent=CRED;
+  if(CRED_T)clearTimeout(CRED_T);
+  CRED_T=setTimeout(()=>{ const p=$('credPeek'); if(p)p.textContent=''; CRED_T=null; },5000);
+}
+async function credCopy(){
+  if(!CRED){ $('credPeek').textContent='— tozalangan'; return }
+  let ok=false;
+  try{ await navigator.clipboard.writeText(CRED); ok=true; }
+  catch(e){
+    // Xavfsiz bo‘lmagan kontekst (http) — zaxira yo‘l.
+    try{
+      const ta=document.createElement('textarea');
+      ta.value=CRED; ta.setAttribute('readonly','');
+      ta.style.position='fixed'; ta.style.opacity='0';
+      document.body.appendChild(ta); ta.select();
+      ok=document.execCommand('copy');
+      document.body.removeChild(ta);
+    }catch(e2){ ok=false; }
+  }
+  if(ok) CRED_COPIED=true;
+  // ⚠️  Matn ATAYLAB «buferda qoladi» deydi: ilgari faqat
+  //     «nusxalandi» yozilardi va operator «Yopish va tozalash» dan
+  //     keyin parol HECH QAYERDA qolmadi deb o‘ylardi — NOTO‘G‘RI.
+  $('credPeek').textContent=ok
+    ? '✓ nusxalandi — buferda QOLADI, ishlatgach boshqa narsa nusxalang'
+    : '✗ nusxalanmadi — "ko‘rsatish" bilan oling';
+
 }
 
 async function openDetail(id){
@@ -285,13 +495,29 @@ async function openDetail(id){
       <div class="card" style="overflow:hidden"><table><tbody>
         ${d.recent_sales.map(s=>`<tr style="cursor:default"><td>${esc(s.receipt_no)}</td><td class="muted">${dt(s.at)}</td><td style="text-align:right;font-weight:700" class="tabular">${fmt(s.total)}</td></tr>`).join('')||'<tr><td class="muted">Savdo yo’q</td></tr>'}
       </tbody></table></div>
+      <!-- P0-F: amallar TURIGA ko‘ra AJRATILGAN. Ilgari «To‘xtatish» va
+           «O‘chirish» yonma-yon, bir xil o‘lcham va bir xil uslubda
+           turardi — ya’ni QAYTARILADIGAN (suspend) va LIFECYCLE
+           (soft-delete) amali vizual jihatdan farqlanmasdi. Endi:
+           (1) kundalik amallar yuqori qatorda; (2) o‘chirish ALOHIDA
+           «xavf zonasi»da, chegara bilan; (3) o‘chirish TERIB
+           tasdiqlanadi (deleteCompany funksiyasi). -->
       <div class="row" style="justify-content:space-between;margin-top:18px;flex-wrap:wrap;gap:8px">
         <div class="row" style="gap:8px;flex-wrap:wrap">
           <button class="btn btn-ghost btn-sm" onclick="openReset('${esc(d.code)}')">Parolni tiklash</button>
-          <button class="btn btn-ghost btn-sm" onclick="toggleSuspend('${id}')">${d.suspended?'▶ Qayta yoqish':'⏸ To‘xtatish'}</button>
-          <button class="btn btn-ghost btn-sm" style="color:var(--danger);border-color:var(--danger)" onclick="deleteCompany('${id}')">🗑 O‘chirish</button>
+          <button class="btn btn-ghost btn-sm" id="btnSuspend" onclick="toggleSuspend('${id}')">${d.suspended?'▶ Qayta yoqish (kirishni ochish)':'⏸ To‘xtatish (kirishni yopish)'}</button>
         </div>
         <button class="btn btn-primary" onclick="closeOverlay('ovDetail')">Yopish</button>
+      </div>
+      <div style="margin-top:16px;border:1px solid var(--danger);border-radius:12px;padding:12px 14px">
+        <div style="font-weight:700;font-size:13px;color:var(--danger)">Xavf zonasi</div>
+        <div class="muted" style="font-size:12.5px;margin:4px 0 10px">
+          Yumshoq o‘chirish: kirish darhol yopiladi, do‘kon ro‘yxatdan
+          chiqadi. Biznes ma’lumoti (savdo, kassa, hisob-kitob)
+          O‘CHIRILMAYDI va «O‘chirilganlar» ro‘yxatidan tiklanadi.</div>
+        <button class="btn btn-ghost btn-sm" id="btnDelete"
+                style="color:var(--danger);border-color:var(--danger)"
+                onclick="deleteCompany('${id}','${esc(d.code)}')">🗑 Yumshoq o‘chirish…</button>
       </div>`;
   }catch(e){ $('detailBox').innerHTML='<div class="empty">Xato: '+esc(e.message)+'</div>'; }
 }
@@ -303,26 +529,102 @@ async function changePlan(id,plan){
 
 async function toggleSuspend(id){
   const next=!(DETAIL&&DETAIL.suspended);
-  if(next && !confirm('Do‘konni vaqtincha to‘xtatasizmi?\nEgаси ilovaга kira olmaydi. Ma’lumot O‘CHMAYDI — istalgan payt qayta yoqasiz.'))return;
+  // P0-F: QAYTA YOQISH tasdiq SO‘RAMAYDI (u kirishni OCHADI — zararsiz
+  // yo‘nalish); TO‘XTATISH esa so‘raydi, chunki u ishchi do‘konni to‘sadi.
+  if(next && !confirm('Do‘konni vaqtincha TO‘XTATASIZMI?\n\nEgasi va xodimlari ilovaga kira olmaydi.\nMa’lumot O‘CHMAYDI — istalgan payt qayta yoqasiz.'))return;
   try{ await api('/companies/'+id+'/suspend',{method:'PATCH',body:JSON.stringify({suspended:next})}); closeOverlay('ovDetail'); load(); }
   catch(e){ alert('Xato: '+e.message); }
 }
 
-async function deleteCompany(id){
+async function deleteCompany(id,code){
+  // P0-F: IKKI `confirm()` o‘rniga DO‘KON KODINI TERISH. Ketma-ket ikki
+  // modal dialog — amalda bir xil "Enter, Enter" harakati; u xato
+  // do‘konni o‘chirishdan SAQLAMAYDI. Kodni terish esa operator AYNAN
+  // qaysi do‘konni nazarda tutganini isbotlaydi.
   const nm=(DETAIL&&DETAIL.name)||'do‘kon';
-  if(!confirm('«'+nm+'» do‘konini o‘chirasizmi?\nKirish darhol yopiladi. (Yumshoq o‘chirish — ma’lumot bazada qoladi, texnik yordam bilan tiklash mumkin.)'))return;
-  if(!confirm('Aniqmisiz? «'+nm+'» ro‘yxatdan olib tashlanadi.'))return;
+  const kirgan=prompt('«'+nm+'» do‘konini YUMSHOQ o‘chirish.\n\n'
+    +'Kirish darhol yopiladi. Biznes ma’lumoti O‘CHIRILMAYDI — keyinroq\n'
+    +'«O‘chirilganlar» ro‘yxatidan tiklash mumkin.\n\n'
+    +'Tasdiqlash uchun do‘kon KODINI kiriting: '+code);
+  if(kirgan===null)return;
+  if(kirgan.trim().toLowerCase()!==String(code).toLowerCase()){
+    alert('Kod mos kelmadi — hech narsa o‘chirilmadi.'); return;
+  }
   try{ await api('/companies/'+id,{method:'DELETE'}); closeOverlay('ovDetail'); load(); }
   catch(e){ alert('Xato: '+e.message); }
 }
 
+// ══ P0-F) O‘chirilganlar ro‘yxati va TIKLASH ═════════════════
+async function loadDeleted(){
+  try{
+    const {companies}=await api('/deleted-companies');
+    $('delCount').textContent=companies.length?(companies.length+' ta'):'';
+    $('delWrap').style.display=companies.length?'block':'none';
+    $('delRows').innerHTML=companies.map(c=>`<tr style="cursor:default">
+      <td><div style="font-weight:700">${esc(c.name)}</div>
+          <div class="muted" style="font-size:12px">${esc(c.code)}</div></td>
+      <td class="muted">${day(c.deleted_at)}</td>
+      <td style="text-align:right">${c.closed_by_owner
+        ? '<span class="pill susp" title="Egasi hisob o‘chirish oqimi bilan yopgan — konsoldan tiklanmaydi">egasi yopgan</span>'
+        : (c.code_taken
+          ? '<span class="pill susp" title="Ayni kodli tirik do‘kon bor">kod band</span>'
+          : `<button class="btn btn-ghost btn-sm" onclick="restoreCompany('${c.id}','${esc(c.code)}')">↺ Tiklash</button>`)}</td>
+
+    </tr>`).join('');
+  }catch(e){
+    if(e.message==='401') return;
+    // ⚠️  XATO KO‘RINADIGAN joyga yoziladi. Ilgari u `#delCount` ga
+    //     yozilardi, lekin u `#delWrap` ICHIDA va `#delWrap` ni `block`
+    //     qiladigan yagona qator FAQAT muvaffaqiyatli javobda ishlardi —
+    //     ya’ni xato xabari `display:none` ortida qolib, operator
+    //     o‘chirilganlar ro‘yxati BO‘SH deb o‘ylardi.
+    $('delWrap').style.display='block';
+    $('delCount').textContent='xato: '+e.message;
+    $('delRows').innerHTML='<tr><td class="muted">Ro‘yxatni yuklab bo‘lmadi — "Yangilash" bilan qayta urining</td></tr>';
+  }
+}
+
+async function restoreCompany(id,code){
+  if(!confirm('«'+code+'» do‘konini TIKLASHMI?\n\nKirish qayta ochiladi. Biznes ma’lumoti allaqachon bazada — u TEGILMAYDI.'))return;
+  try{ await api('/companies/'+id+'/restore',{method:'POST'}); loadDeleted(); load(); }
+  catch(e){ alert('Tiklanmadi: '+e.message); }
+}
+
+// ══ P0-E) Konsol audit izi ════════════════════════════
+async function loadAudit(){
+  $('auditRows').innerHTML='<tr><td class="muted">Yuklanmoqda…</td></tr>';
+  try{
+    const d=await api('/audit?limit=100');
+    $('auditNote').textContent=(d.attribution==='shared-key')
+      ? 'Atributsiya: UMUMIY kalit — "qaysi odam" ko‘rsatilmaydi' : '';
+    $('auditRows').innerHTML=d.entries.map(e=>`<tr style="cursor:default">
+      <td class="muted" style="white-space:nowrap">${dt(e.at)}</td>
+      <td>${esc(e.action)} · ${esc(e.entity)}</td>
+      <td class="muted">${esc(e.company_code||'—')}</td>
+      <td class="muted" style="font-size:12px">${esc(JSON.stringify(e.after||e.before||{}))}</td>
+    </tr>`).join('')||'<tr><td class="muted">Yozuv yo‘q</td></tr>';
+  }catch(e){ if(e.message!=='401') $('auditRows').innerHTML='<tr><td class="muted">Xato: '+esc(e.message)+'</td></tr>'; }
+}
+
 async function openReset(code){
-  const np=prompt('«'+code+'» do’koni egаси uchun YANGI parol (kamida 6 belgi):');
-  if(!np)return;
-  if(np.length<6){alert('Parol kamida 6 belgi');return}
+  // P0-C: chegara SERVER qoidasi bilan bir xil (12, `MIN_LEN`). Ilgari
+  //       bu yerda ham «kamida 6» yozilgan edi — server esa 400 berardi.
+  const np=prompt('«'+code+'» do’koni egasi uchun YANGI parol (kamida 12 belgi):');
+  if(np===null)return;
+  if(!np||np.length<12){alert('Parol kamida 12 belgi — hech narsa o‘zgartirilmadi');return}
   try{
     const r=await api('/reset-password',{method:'POST',body:JSON.stringify({company_code:code,new_password:np})});
-    alert('✓ Parol tiklandi.\nLogin: '+(r.owner_phone||'')+'\nYangi parol: '+np);
+    // P0-D: parol `alert()` ga YOZILMAYDI. `alert` matni skrinshotga va
+    // ekran yozuviga tushadi va operator OK bosmaguncha ekranda turadi.
+    // Endi provisioning bilan AYNI bir martalik topshirish paneli.
+    credSet(np);
+    $('detailBox').innerHTML=`<div class="ok-banner">✓ Parol tiklandi — eski
+      sessiyalar bekor qilindi.<br><b>Login:</b> ${esc(r.owner_phone||'')}<br>
+      <span class="muted">Parol ekranda ko‘rsatilmaydi — nusxalang yoki qisqa
+      vaqt ko‘ring.</span></div>
+      ${credPanel()}
+      <div class="row" style="justify-content:flex-end;margin-top:10px">
+        <button class="btn btn-primary" onclick="credClear();closeOverlay('ovDetail');load()">Yopish va tozalash</button></div>`;
   }catch(e){ alert('Xato: '+e.message); }
 }
 

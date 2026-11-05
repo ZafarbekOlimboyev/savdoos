@@ -1,4 +1,6 @@
 import { useMemo, useRef, useState } from "react";
+import { parseScaleBarcode, pluMatches } from "@/lib/scaleBarcode";
+import { useBarcodeScanner } from "@/lib/useBarcodeScanner";
 import {
   ArrowLeft,
   Barcode,
@@ -114,6 +116,42 @@ export function Products() {
     if (hit) { setDetailId(hit.id); setQ(""); }
   }
 
+  // ── APPARAT SKANER (fokusdan mustaqil) ──────────────────────────────────
+  //  Ega haqiqiy skaner bilan o'lchadi: bu ekranda skan FAQAT qidiruv maydoni
+  //  fokusda bo'lganda ishlardi (yuqoridagi `onSearchEnter` — uning
+  //  `onKeyDown` i), hech narsa fokusda bo'lmasa zarbalar `<body>` ga ketib
+  //  JIM yo'qolardi. Ushlash endi umumiy `useBarcodeScanner` da; bu yerda
+  //  faqat SEMANTIKA.
+  //
+  //  QAT'IY: ANIQ moslik. Fuzzy filtr (nom/artikul/SKU/barkod SUBSTRING,
+  //  `rows` memo'si) ODAMNING yozuvi uchun qoladi — skan unga TUSHMAYDI, aks
+  //  holda tasodifiy mahsulot ochilardi. «Birinchi ko'rinayotgan» kabi zaxira
+  //  tanlov YO'Q. Zaxira (stok) hech qachon o'zgartirilmaydi.
+  const [scanErr, setScanErr] = useState("");
+  function onHardwareScan(code: string) {
+    setScanErr("");
+    //  Tarozi etiketkasi (27 + PLU + gramm): `onSearchEnter` buni UMUMAN
+    //  qo'llamagan — u `27…` ni LITERAL barkod deb izlab, jim topmasdi.
+    const scale = parseScaleBarcode(code);
+    if (scale) {
+      const wp = list.find((p) => p.is_weighted && pluMatches(p.plu_code, scale.plu));
+      if (wp) { setDetailId(wp.id); setQ(""); return; }
+      setScanErr(t("pos.scaleNoProduct", { plu: scale.plu }));
+      return;
+    }
+    const c = code.replace(/[^0-9]/g, "");
+    const hit = c.length >= 6 ? list.find((p) => (p.barcodes || []).includes(c)) : undefined;
+    if (hit) { setDetailId(hit.id); setQ(""); return; }
+    //  FAIL-LOUD. Ilgari `onSearchEnter` moslik bo'lmasa JIMGINA qaytardi.
+    //  ⚠️  Arxiv ko'rinishida ro'yxat FAQAT arxivlangan tovarlardan iborat
+    //      (`/products?archived=1`), shu bois faol tovarni skanerlasa
+    //      «topilmadi» chiqadi — ma'lum cheklov, lekin xabar KO'RINADI.
+    setScanErr(t("pos.notFound"));
+  }
+  //  Faqat RO'YXAT ko'rinishida: detal sahifasi, yangi kirim, import yoki
+  //  tahrir oynasi ochiq bo'lsa skan ro'yxat ostidan sahifani almashtirmasin.
+  useBarcodeScanner({ onScan: onHardwareScan, enabled: !detailId && !add && !imp && !editId });
+
   // Har mahsulotga holat + jonli sanagichlar (butun katalog bo'yicha)
   const withStatus = useMemo(() => list.map((p) => ({ p, s: statusOf(p) })), [list]);
   const counts = useMemo(() => {
@@ -206,6 +244,10 @@ export function Products() {
             </div>
             <CatFilter cats={cats.data || []} value={catFlt} onChange={setCatFlt} t={t} />
           </div>
+          {scanErr && (
+            <div data-testid="prod-scan-err" role="status"
+              style={{ marginBottom: 12, padding: "9px 12px", borderRadius: 10, background: "rgba(220,150,20,0.12)", color: "var(--warn)", fontSize: 13, fontWeight: 600 }}>{scanErr}</div>
+          )}
 
           {/* Quick tabs */}
           <div style={{ display: "flex", gap: 8, marginBottom: 16, flexWrap: "wrap" }}>
@@ -600,13 +642,45 @@ function FullDetail({ productId, catName, onBack, onEdit, editModal }: {
       <div className="tabular" style={{ fontSize: 19, fontWeight: 800, marginTop: 5, color: color || "var(--text)" }}>{value}</div>
     </div>
   );
-  const StatBlock = ({ title, s }: { title: string; s: { qty: number; revenue: number; profit: number } }) => (
+  //  ══ NOMA’LUM QIYMAT GARDI — NEGA KERAK (hammasi O‘LCHANGAN) ═══════
+  //
+  //  Ilgari bu komponent `s.qty` ni TO‘G‘RIDAN-TO‘G‘RI o‘qirdi. `d` uchun
+  //  guard bor (pastda `{!d ? ... : ...}`), `d.sales_*` uchun YO‘Q edi — ya‘ni
+  //  server bu maydonni yubormasa `undefined.qty` TASHLANADI.
+  //
+  //  NEGA BU «FAQAT TEST FIKSTURASI» MUAMMOSI EMAS:
+  //    · Ilovada ErrorBoundary YO‘Q (`packages/shared/src`, `apps/pos/src`,
+  //      `apps/manager/src` da `componentDidCatch` / `getDerivedStateFromError`
+  //      — 0 joy), va ikkala ilova `createHashRouter` + `RouterProvider` ni
+  //      birorta `errorElement` SIZ ishlatadi. Shu bois bu `throw`
+  //      react-router ning standart xato sahifasini («Unexpected Application
+  //      Error!») butun qobiq ustiga chiqaradi — ya‘ni do‘kon xodimi uchun
+  //      ilova ISHLAMAY QOLADI.
+  //    · Maydon API ga KEYINCHALIK qo‘shilgan (`2d1429a`), klient esa
+  //      avto-yangilanadi. CLAUDE.md ning «AVVAL SERVER, KEYIN KLIENT»
+  //      qoidasi aynan shu skew uchun — lekin qoida BUZILGANDA (yoki server
+  //      rollback qilinganda) nima bo‘lishini ham hal qilish kerak.
+  //
+  //  NEGA `FullD` MAJBURIY QOLADI: server shartnomasi haqiqatan majburiy —
+  //  `api/v1/products.py` ning YAGONA `return` ida `sales_7d`/`sales_30d`
+  //  SHARTSIZ yuboriladi (handlerda faqat ikki chiqish: `404` va o‘sha
+  //  `return`). Tipni ixtiyoriy qilish HUJJATNI yolg‘onlashtirardi; bu yerda
+  //  faqat «server yolg‘on gapirsa ham yiqilmaslik» ta’minlanadi.
+  //
+  //  NEGA «—», NEGA 0 EMAS: 0 — «hech narsa sotilmadi» degan HAQIQIY
+  //  o‘lchov; yo‘q maydon esa «NOMA’LUM». Nolni ko‘rsatish operatorni
+  //  CHALG‘ITARDI. ⚠️  Shu bois `??` ishlatiladi, `||` EMAS: `0 ?? "—"`
+  //  NOLNI saqlaydi, `0 || "—"` esa uni «—» ga aylantirib HAQIQIY nolni
+  //  yo‘qotardi.
+  //
+  //  Gardni mixlaydigan test: `tests/products-detail-missing-stats.test.tsx`.
+  const StatBlock = ({ title, s }: { title: string; s?: { qty?: number; revenue?: number; profit?: number } | null }) => (
     <div className="card" style={{ padding: "14px 18px" }}>
       <div style={{ fontSize: 13.5, fontWeight: 700, marginBottom: 10 }}>{title}</div>
       <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 10 }}>
-        <div><div style={{ fontSize: 11.5, color: "var(--muted)" }}>{t("prod.sold")}</div><div className="tabular" style={{ fontSize: 16, fontWeight: 800, marginTop: 3 }}>{s.qty}</div></div>
-        <div><div style={{ fontSize: 11.5, color: "var(--muted)" }}>{t("prod.revenue")}</div><div className="tabular" style={{ fontSize: 16, fontWeight: 800, marginTop: 3 }}>{fmt(s.revenue)}</div></div>
-        <div><div style={{ fontSize: 11.5, color: "var(--muted)" }}>{t("prod.profit")}</div><div className="tabular" style={{ fontSize: 16, fontWeight: 800, marginTop: 3, color: s.profit >= 0 ? "var(--ok)" : "var(--danger)" }}>{fmt(s.profit)}</div></div>
+        <div><div style={{ fontSize: 11.5, color: "var(--muted)" }}>{t("prod.sold")}</div><div className="tabular" style={{ fontSize: 16, fontWeight: 800, marginTop: 3 }}>{s?.qty ?? "—"}</div></div>
+        <div><div style={{ fontSize: 11.5, color: "var(--muted)" }}>{t("prod.revenue")}</div><div className="tabular" style={{ fontSize: 16, fontWeight: 800, marginTop: 3 }}>{s?.revenue == null ? "—" : fmt(s.revenue)}</div></div>
+        <div><div style={{ fontSize: 11.5, color: "var(--muted)" }}>{t("prod.profit")}</div><div className="tabular" style={{ fontSize: 16, fontWeight: 800, marginTop: 3, color: s?.profit == null ? "var(--muted)" : (s.profit >= 0 ? "var(--ok)" : "var(--danger)") }}>{s?.profit == null ? "—" : fmt(s.profit)}</div></div>
       </div>
     </div>
   );
@@ -636,14 +710,26 @@ function FullDetail({ productId, catName, onBack, onEdit, editModal }: {
             <div style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 12 }}>
               <Stat label={t("prod.buyPrice")} value={fmt(d.base_buy_price)} />
               <Stat label={t("prod.sellPrice")} value={fmt(d.base_sell_price)} color="var(--accent-strong)" />
-              <Stat label={t("prod.profitUnit")} value={fmt(d.profit_unit)} color={d.profit_unit >= 0 ? "var(--ok)" : "var(--danger)"} />
-              <Stat label={t("prod.margin")} value={`${d.margin_pct}%`} color={d.profit_unit >= 0 ? "var(--ok)" : "var(--danger)"} />
+              {/*  ⚠️  AYNI GARD SINFI, LEKIN BOSHQA ZARAR SHAKLI (o‘lchangan).
+                       Bu to‘rt maydon `StatBlock` dagidek TypeError BERMAYDI,
+                       shu bois CI ni qizil QILMAYDI — ular JIM YOLG‘ON
+                       ko‘rsatadi:
+                         · `fmt(undefined)` → «0 so‘m», chunki `fmt` ichida
+                           `const x = n || 0` bor (`lib/format.ts:37`). Ya‘ni
+                           NOMA’LUM foyda ekranda NOL PUL bo‘lib chiqadi —
+                           bu NaN dan ham yomon, chunki ishonchli ko‘rinadi.
+                         · `${d.margin_pct}%` → «undefined%»
+                         · `+${d.month_in}` → «+undefined»
+                       `== null` ATAYLAB (`!d.x` EMAS): u `undefined`/`null`
+                       ni ushlaydi, HAQIQIY 0 ni esa SAQLAYDI. */}
+              <Stat label={t("prod.profitUnit")} value={d.profit_unit == null ? "—" : fmt(d.profit_unit)} color={d.profit_unit == null ? undefined : (d.profit_unit >= 0 ? "var(--ok)" : "var(--danger)")} />
+              <Stat label={t("prod.margin")} value={d.margin_pct == null ? "—" : `${d.margin_pct}%`} color={d.profit_unit == null ? undefined : (d.profit_unit >= 0 ? "var(--ok)" : "var(--danger)")} />
             </div>
             <div style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 12 }}>
               <Stat label={t("prod.stockInWarehouse")} value={`${d.stock} ${unitL(t, d.unit_code)}`} color={d.stock <= 0 ? "var(--danger)" : undefined} />
               <Stat label={t("prod.stockValue")} value={fmt(d.stock * d.base_buy_price)} />
-              <Stat label={t("prod.monthIn")} value={`+${d.month_in}`} color="var(--ok)" />
-              <Stat label={t("prod.monthOut")} value={`−${d.month_out}`} color="var(--danger)" />
+              <Stat label={t("prod.monthIn")} value={d.month_in == null ? "—" : `+${d.month_in}`} color={d.month_in == null ? undefined : "var(--ok)"} />
+              <Stat label={t("prod.monthOut")} value={d.month_out == null ? "—" : `−${d.month_out}`} color={d.month_out == null ? undefined : "var(--danger)"} />
             </div>
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
               <StatBlock title={t("prod.stat30")} s={d.sales_30d} />
@@ -652,9 +738,14 @@ function FullDetail({ productId, catName, onBack, onEdit, editModal }: {
             {d.last_sold_at && (
               <div style={{ fontSize: 12.5, color: "var(--muted)" }}>{t("prod.lastSold")}: {new Date(d.last_sold_at).toLocaleString("ru-RU")}</div>
             )}
-            {d.barcodes.length > 0 && (
+            {/*  AYNI SINFNING IKKINCHI NUSXASI (`StatBlock` izohiga qarang):
+                     ichki MASSIVGA guardsiz murojaat. CI yiqilishini bu
+                     KELTIRMAGAN (ro‘yxat shaklida `barcodes` BOR), lekin
+                     server bo‘sh tana yoki eski shakl qaytarsa
+                     `undefined.length` AYNI xato sahifasini berardi. */}
+            {(d.barcodes ?? []).length > 0 && (
               <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-                {d.barcodes.map((b) => (
+                {(d.barcodes ?? []).map((b) => (
                   <span key={b} className="tabular" style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 12, fontWeight: 600, padding: "5px 10px", borderRadius: 8, background: "var(--surface)", border: "1px solid var(--border)", color: "var(--text3)" }}>
                     <Barcode size={14} />{b}
                   </span>
@@ -821,12 +912,11 @@ export function FullReceiving({ cats, products, suppliers, onBack, onSaved }: {
     if (hit) fillFrom(key, hit, c);
     else setRow(key, { barcode: c, productId: null, lots: null, lotsAuto: true });
   }
-  // Mavjud mahsulotdan avto-to'ldirish (nom, kategoriya, narxlar, qoldiq + BARCODE)
-  function fillFrom(key: number, p: Product, keepBarcode = "") {
-    // Kuzatuvli tovarga BITTA partiya qoralamasi ochiladi (miqdori qatorga
-    // ergashadi). Kuzatuvsizda `lots` NULL qoladi — payload o'zgarmaydi.
-    const tracked = trackedById.has(p.id) || !!p.track_lots;
-    setRows((rs) => rs.map((r) => (r.key !== key ? r : {
+  //  Qator patchi SOF funksiyada — `fillFrom` (nom-autocomplete) ham, apparat
+  //  skaner yo'li ham AYNAN shuni ishlatadi. Ikki xil to'ldirish mantiqi
+  //  bo'lishi mumkin emas: skan va sichqoncha bir xil natija beradi.
+  function filledRow(r: RRow, p: Product, keepBarcode: string, tracked: boolean): RRow {
+    return {
       ...r,
       productId: p.id, name: p.name, catId: p.category_id || "",
       cost: p.base_buy_price ? String(Math.round(p.base_buy_price)) : "",
@@ -835,9 +925,67 @@ export function FullReceiving({ cats, products, suppliers, onBack, onSaved }: {
       // Skanerlangan kod bo'lsa o'sha; aks holda mahsulotning mavjud barkodi (bo'lsa)
       barcode: keepBarcode || (p.barcodes && p.barcodes[0]) || "",
       lots: tracked ? [emptyLot(r.qty)] : null, lotsAuto: true,
-    })));
+    };
+  }
+  // Mavjud mahsulotdan avto-to'ldirish (nom, kategoriya, narxlar, qoldiq + BARCODE)
+  function fillFrom(key: number, p: Product, keepBarcode = "") {
+    // Kuzatuvli tovarga BITTA partiya qoralamasi ochiladi (miqdori qatorga
+    // ergashadi). Kuzatuvsizda `lots` NULL qoladi — payload o'zgarmaydi.
+    const tracked = trackedById.has(p.id) || !!p.track_lots;
+    setRows((rs) => rs.map((r) => (r.key !== key ? r : filledRow(r, p, keepBarcode, tracked))));
     setFocusKey(null);
   }
+
+  // ── APPARAT SKANER (fokusdan mustaqil) ──────────────────────────────────
+  //  Ega haqiqiy skaner bilan ikki nuqsonni o'lchadi:
+  //   1) barkod maydoniga BOSIB fokus bermasa skan mahsulotni topmasdi;
+  //   2) skanerning `Enter` i FOKUSDAGI tugmani bosib YANGI BO'SH QATOR
+  //      qo'shardi (bu ekranda `<form>` yo'q — ya'ni sabab submit emas,
+  //      «qator qo'shish» tugmasining o'zi fokusda qolgani).
+  //  (2) umumiy hook'ning `preventDefault()` i bilan yopiladi: da'vo qilingan
+  //  `Enter` tugmaga YETIB BORMAYDI.
+  //
+  //  QAYSI QATORGA — DETERMINISTIK, taxmin YO'Q:
+  //    1. ayni mahsulot qatori bor bo'lsa — SHU qator qayta to'ldiriladi;
+  //    2. aks holda birinchi BO'SH (tasdiqlanmagan, mahsulotsiz, nomsiz,
+  //       barkodsiz) qator;
+  //    3. bo'sh qator yo'q bo'lsa — YANGI qator qo'shilib, darhol to'ldiriladi.
+  //  ⚠️  MIQDORGA TEGILMAYDI. Bu savdo emas, KIRIM hujjati: miqdorni operator
+  //      kiritadi. Takror skan ayni qatorni qayta to'ldiradi (idempotent) —
+  //      POS'dagi «+1» semantikasi bu yerda pul xatosi bo'lardi.
+  //  Tanilmagan barkod uchun MAVJUD biznes qoidasi saqlanadi (`onBarcode`):
+  //  kod qatorda qoladi va operator nom yozib YANGI mahsulot yaratadi. Boshqa
+  //  mahsulotga zaxira tanlov YO'Q.
+  function onHardwareScan(code: string) {
+    const c = code.replace(/[^0-9]/g, "");
+    if (!c) return;
+    const hit = c.length >= 6 ? products.find((p) => (p.barcodes || []).includes(c)) || null : null;
+    const same = hit ? rows.find((r) => r.productId === hit.id) : undefined;
+    if (same) { onBarcode(same.key, c); return; }
+    const blank = rows.find((r) => !r.confirmed && !r.productId && !r.name.trim() && !r.barcode);
+    if (blank) { onBarcode(blank.key, c); return; }
+    //  Bo'sh qator yo'q — yangisini ALLAQACHON TO'LDIRILGAN holda qo'shamiz
+    //  (ikki qadam qilsak `setRows` snapshot'ida qator hali bo'lmasdi).
+    const key = seq;
+    setSeq((n) => n + 1);
+    setRows((rs) => {
+      const base = emptyRow(key);
+      if (!hit) return [...rs, { ...base, barcode: c }];
+      const tracked = trackedById.has(hit.id) || !!hit.track_lots;
+      return [...rs, filledRow(base, hit, c, tracked)];
+    });
+  }
+  //  ⚠️  `enabled` SHART. Ilgari u YO'Q edi va hook `NewSupplierCard` modali
+  //      (`:1158`, `ui.tsx` `Modal` — fokus tuzog'i ham, Escape ham YO'Q)
+  //      ochiq bo'lganda ham TIRIK qolardi. Nuqson faqat tasodifan niqoblangan:
+  //      kartaning nom inputida `autoFocus` bor. Fokus Bekor/Saqlash TUGMASIGA
+  //      o'tishi bilan skan dialog ORTIDA kirim qatorlarini o'zgartirardi.
+  //  ⚠️  `LotReceivingEditor` bu shartga ATAYLAB QO'SHILMAYDI: u modal emas,
+  //      qator ichidagi inline muharrir va partiyali HAR qatorda ko'rinadi —
+  //      uni to'sish partiyali tovar bor hujjatlarda skanerni butunlay
+  //      o'chirardi. Uning inputlarida yozilganda mavjud tahrirlanadigan-fokus
+  //      gardi allaqachon ishlaydi (`tests/receiving-scan-dialog.test.tsx` S3c/S3d).
+  useBarcodeScanner({ onScan: onHardwareScan, enabled: !newSupOpen });
 
   const total = rows.filter((r) => r.confirmed).reduce((s, r) => s + (+r.qty || 0) * (+r.cost || 0), 0);
 
@@ -1082,9 +1230,38 @@ function NewSupplierCard({ onClose, onSaved }: { onClose: () => void; onSaved: (
   const [phone, setPhone] = useState("");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
+  const box = useRef<HTMLDivElement>(null);
+  //  ⚠️  ENTER SERVERGA YOZMAYDI. Haqiqiy apparatda o'lchangan FAIL: nom maydoni
+  //      `autoFocus` bo'lgani uchun skaner burstining raqamlari unga tushardi va
+  //      skanerning oxirgi `Enter` i inputning O'Z `onKeyDown` iga tushib
+  //      `save()` ni chaqirardi — barkod TA'MINOTCHI NOMI bo'lib yozilib,
+  //      `onSaved` uni kirim hujjatiga avtomatik tanlab, dialogni yopardi.
+  //      Umumiy skaner yo'li bu yerda AYBDOR EMAS va yordam ham bera olmaydi:
+  //      u `isEditableTarget` sababi ataylab chetga chiqadi va `preventDefault`
+  //      qilmaydi (`useBarcodeScanner.ts:68`), ya'ni zarbalar nativ yo'l bilan
+  //      inputga boradi.
+  //  Yechim — uyning MAVJUD naqshi (`LotReceivingEditor.tsx:244-252`):
+  //  `Enter` hujjatni yubormaydi, faqat keyingi maydonga o'tadi. Saqlash FAQAT
+  //  operatorning aniq «Saqlash» harakati bilan.
+  function onKey(e: React.KeyboardEvent) {
+    if (e.key !== "Enter") return;
+    e.preventDefault();
+    const f = Array.from(box.current?.querySelectorAll("input") || []);
+    const i = f.indexOf(e.target as HTMLInputElement);
+    if (i >= 0 && f[i + 1]) f[i + 1].focus();
+  }
   async function save() {
     if (busy) return;   // QA PC-029: Enter tugmani chetlab qayta-qayta POST yubormasin (dublikat ta'minotchi)
     if (!name.trim()) { setErr(t("purch.name")); return; }
+    //  ⚠️  IKKINCHI TO'R, yuqoridagi birinchisidan MUSTAQIL. Operator skan
+    //      qilib, maydonga qaramasdan «Saqlash» ni bosishi mumkin.
+    //      QOIDA ATAYLAB TOR: faqat RAQAMDAN iborat 6+ belgili qiymat. Keng
+    //      qoida (masalan «bo'shliqsiz va 6+ raqam bor») alfanumerik Code-128
+    //      etiketkasini ham tutardi, lekin AYNI paytda haqiqiy nomlarni ham
+    //      rad etib, soxta pozitiv mashinasiga aylanardi. Do'konning haqiqiy
+    //      etiketkalari — sof raqamli EAN-13. «Baraka 24» kabi raqam
+    //      qatnashgan nomlar O'TADI, chunki ularda harf/bo'shliq bor.
+    if (/^\d{6,}$/.test(name.trim())) { setErr(t("purch.nameLooksLikeCode")); return; }
     setBusy(true); setErr("");
     try {
       const s = await post<{ id: string; name: string }>("/suppliers", { name: name.trim(), phone: phone.trim() || null });
@@ -1094,11 +1271,11 @@ function NewSupplierCard({ onClose, onSaved }: { onClose: () => void; onSaved: (
   return (
     <Modal onClose={onClose} width={400}>
       <div style={{ fontSize: 18, fontWeight: 800, marginBottom: 16 }}>{t("purch.newSupplier")}</div>
-      <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+      <div ref={box} style={{ display: "flex", flexDirection: "column", gap: 12 }}>
         <input value={name} autoFocus placeholder={t("purch.name")} onChange={(e) => setName(e.target.value)}
-          onKeyDown={(e) => { if (e.key === "Enter") save(); }} style={inputStyle} />
+          onKeyDown={onKey} style={inputStyle} />
         <input value={phone} placeholder={t("cust.thPhone")} onChange={(e) => setPhone(e.target.value)}
-          onKeyDown={(e) => { if (e.key === "Enter") save(); }} style={inputStyle} />
+          onKeyDown={onKey} style={inputStyle} />
       </div>
       {err && <div style={{ color: "var(--danger)", fontSize: 13, marginTop: 10 }}>{err}</div>}
       <div style={{ display: "flex", gap: 10, marginTop: 18 }}>

@@ -76,6 +76,15 @@ export const useAuth = create<AuthState>()(
       token: null,
       employee: null,
       setAuth: (token, employee) => {
+        //  ⚠️  PARTIYA BO'LIMI KESHI BEKOR QILINADI. `useAvailability` keshi
+        //      MODUL-GLOBAL (`components/lotui.tsx:257`, TTL 60s) va u na
+        //      xodimga, na do'konga bog'langan. Logout qilinmasdan boshqa
+        //      hisobga kirilganda (kassir almashuvi, boshqa tenant) xodim B
+        //      60 sekundgacha xodim A ning bo'lim ko'rinishini MEROS olardi.
+        //      Lazy import: `lotui` -> `lib/api` -> `store/auth` sikli statik
+        //      bo'lmasin (`store/shift` va `lib/sync` bilan AYNI naqsh).
+        import("@/components/lotui").then(({ invalidateAvailability }) => { invalidateAvailability(); })
+          .catch(() => { /* ignore — keyingi so'rov baribir TTL bo'yicha yangilaydi */ });
         set({ token, employee });
         // P9: offline savdo tasdig'ini DARHOL olamiz. Aks holda `syncTick` ning 30 s
         // siklini kutardik va aynan shu oynada tarmoq uzilsa, kassir butun uzilish
@@ -118,6 +127,13 @@ export const useAuth = create<AuthState>()(
         // ham eskirgan tasdiq qolib ketmasin.)
         try {
           import("@/lib/sync").then(({ clearOfflinePolicy }) => { clearOfflinePolicy(); })
+            .catch(() => { /* ignore */ });
+        } catch { /* ignore */ }
+        // Partiya bo'limi ko'rinishi ham bekor qilinadi — keyingi xodim
+        // avvalgisining menyu holatini MEROS QILIB OLMASIN. Kesh modul-global
+        // va 60 s TTL bilan yashaydi, logout esa uni hech qachon tozalamagan.
+        try {
+          import("@/components/lotui").then(({ invalidateAvailability }) => { invalidateAvailability(); })
             .catch(() => { /* ignore */ });
         } catch { /* ignore */ }
         set({ token: null, employee: null });
