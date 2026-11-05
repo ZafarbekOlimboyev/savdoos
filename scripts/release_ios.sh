@@ -52,7 +52,13 @@ readonly MIN_BUILD_EXCLUSIVE=66
 #            qoidasi bo'yicha raqam KUYGAN. R7.2 integratsiyasi mobil manbani
 #            o'zgartirdi (`apps/mobile/lib` 9 fayl, `permission_matrix.json`),
 #            ya'ni 67 endi boshqa source'ni ifodalay olmaydi.
-readonly BURNED_BUILDS="63 64 67"
+#   68 — R7.2 integratsiya source (`d824a02`), `BinOS-68.ipa`,
+#        SHA-256 5c7805003afc89b4b3ccd9a4e4bfd91abda42d23d4ad3a0c65603b0370d50319.
+#        ⚠️  R7.6 da QO'SHILDI: 68 ham ASC'ga YUKLANMAGAN, lekin R7.4 ning
+#            mobil tuzatishi (`9705723` — AI 503 xatolari generik «qayta
+#            urinib ko'ring» matniga tushib qolardi) `apps/mobile/lib` ni
+#            o'zgartirdi, ya'ni 68 endi manbani ifodalay olmaydi.
+readonly BURNED_BUILDS="63 64 67 68"
 # `apps/mobile/test/ios_version_test.dart` shu ikki qiymatni o'qib, o'z
 # konstantalari bilan solishtiradi — ya'ni ular bir-biridan ayrilib ketmaydi.
 
