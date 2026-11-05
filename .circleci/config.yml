@@ -1,0 +1,180 @@
+# BinOS R7.6 CircleCI bootstrap (NO deployment and NO production credentials).
+# This is a PARTIAL replacement: auth refresh, PG18 schema and frontend checks.
+# The complete GitHub CI parity (Flutter, Playwright, full PG18 suites, etc.)
+# remains a release gate and must be ported before production GO.
+version: 2.1
+
+jobs:
+  auth_refresh_pg18:
+    docker:
+      - image: cimg/python:3.12
+        environment:
+          P0C_TEST_POSTGRES: postgresql+psycopg://p0c_local:ci-only-ephemeral@127.0.0.1:55483/p0c_tests
+      - image: postgres:18
+        environment:
+          POSTGRES_USER: p0c_local
+          POSTGRES_PASSWORD: ci-only-ephemeral
+          POSTGRES_DB: p0c_tests
+        command: ["postgres", "-c", "port=55483"]
+    resource_class: medium
+    working_directory: ~/project
+    steps:
+      - checkout
+      - run:
+          name: Install backend test dependencies (never production)
+          command: |
+            cd apps/server
+            python -m pip install --upgrade pip
+            python -m pip install -e ".[dev,import1c]"
+      - run:
+          name: Confirm isolated PostgreSQL 18 test instance
+          command: |
+            python - <<'PY'
+            import time
+            import psycopg
+            for _ in range(40):
+                try:
+                    with psycopg.connect("postgresql://p0c_local:ci-only-ephemeral@127.0.0.1:55483/p0c_tests", connect_timeout=2) as c:
+                        v = int(c.execute("SHOW server_version_num").fetchone()[0])
+                        assert v >= 180000, v
+                    break
+                except psycopg.OperationalError:
+                    time.sleep(2)
+            else:
+                raise RuntimeError("Dedicated PG18 at port 55483 unavailable")
+            print("Isolated PG18 ready; no production connection")
+            PY
+      - run:
+          name: R7.6 HTTP plus real PostgreSQL concurrent refresh tests
+          command: |
+            cd apps/server
+            python -m pytest -q -p no:cacheprovider -rfEs \
+              tests/test_r76_auth_refresh.py tests/test_r76_auth_refresh_pg.py \
+              --junitxml=pytest-circleci-auth.xml -o junit_family=xunit2
+      - run:
+          name: Verify both test modules executed without skips
+          command: |
+            cd apps/server
+            python - <<'PY'
+            import xml.etree.ElementTree as ET
+            root = ET.parse("pytest-circleci-auth.xml").getroot()
+            cases = list(root.iter("testcase"))
+            assert len(cases) >= 20, f"Unexpectedly few testcases: {len(cases)}"
+            labels = [str(c.attrib.get("classname", "")) + "." + str(c.attrib.get("name", "")) for c in cases]
+            for required in ("test_r76_auth_refresh.", "test_r76_auth_refresh_pg."):
+                assert any(required in x for x in labels), f"Required test module not executed: {required}"
+            bad = [(c.get("name"), c[0].tag) for c in cases if len(c)]
+            assert not bad, f"Failures, errors or skips detected: {bad}"
+            print(f"Verified {len(cases)} executed auth/PG18 cases")
+            PY
+      - store_test_results:
+          path: apps/server/pytest-circleci-auth.xml
+      - store_artifacts:
+          path: apps/server/pytest-circleci-auth.xml
+
+  pg18_schema:
+    docker:
+      - image: cimg/python:3.12
+        environment:
+          SAVDOOS_TEST_PG_URL: postgresql://postgres:ci-only-ephemeral@127.0.0.1:5432/postgres
+      - image: postgres:18
+        environment:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: ci-only-ephemeral
+          POSTGRES_DB: postgres
+    resource_class: medium
+    working_directory: ~/project
+    steps:
+      - checkout
+      - run:
+          name: Install backend test dependencies
+          command: |
+            cd apps/server
+            python -m pip install --upgrade pip
+            python -m pip install -e ".[dev]"
+      - run:
+          name: PostgreSQL 18 schema CHECK gate
+          command: |
+            cd apps/server
+            python - <<'PY'
+            import os, time, psycopg
+            for _ in range(40):
+                try:
+                    with psycopg.connect(os.environ["SAVDOOS_TEST_PG_URL"], connect_timeout=2) as c:
+                        v = int(c.execute("SHOW server_version_num").fetchone()[0])
+                        assert v >= 180000, v
+                    break
+                except psycopg.OperationalError:
+                    time.sleep(2)
+            else:
+                raise RuntimeError("PG18 unavailable")
+            PY
+            python -m pytest -q -p no:cacheprovider -rfEs -k external \
+              tests/test_check_defs_pg.py --junitxml=pytest-circleci-pg18.xml \
+              -o junit_family=xunit2
+      - run:
+          name: Assert required NOT ENFORCED detection executed
+          command: |
+            cd apps/server
+            python - <<'PY'
+            import xml.etree.ElementTree as ET
+            cases = list(ET.parse("pytest-circleci-pg18.xml").getroot().iter("testcase"))
+            must = [c for c in cases if "test_PG_NOT_ENFORCED_cheklov_ANIQLANADI_va_ALMASHTIRILADI" in c.attrib.get("name","")]
+            assert len(must) == 1, f"Required PG18 check not executed: {len(must)}"
+            assert not len(must[0]), "Required PG18 check did not PASS"
+            bad = [(c.get("name"), c[0].tag) for c in cases if len(c) and c[0].tag in ("failure","error")]
+            assert not bad, bad
+            print(f"PG18 schema gate: {len(cases)} cases; required detection passed")
+            PY
+      - store_test_results:
+          path: apps/server/pytest-circleci-pg18.xml
+
+  frontend_unit_types:
+    docker:
+      - image: cimg/node:20.18.1
+    resource_class: medium
+    working_directory: ~/project
+    steps:
+      - checkout
+      - run:
+          name: Install repo and app dependencies (matching existing GitHub CI)
+          command: |
+            npm install --no-audit --no-fund
+            (cd apps/manager && npm install --no-audit --no-fund)
+            (cd apps/pos && npm install --no-audit --no-fund)
+      - run:
+          name: Typecheck Manager and POS
+          command: |
+            (cd apps/manager && npx tsc --noEmit)
+            (cd apps/pos && npx tsc --noEmit)
+      - run:
+          name: Vitest component suite with executed-test verification
+          command: |
+            npx vitest run --reporter=json --outputFile=vitest.json
+            node scripts/ci/verify_vitest_run.cjs vitest.json 540
+      - store_artifacts:
+          path: vitest.json
+
+workflows:
+  # Explicit branches only: do not spend credits on main, schedules or demos.
+  # This bootstrap is NOT the complete production release test matrix.
+  free_ci_bootstrap:
+    jobs:
+      - auth_refresh_pg18:
+          filters:
+            branches:
+              only:
+                - ci-migration/r76-circleci
+                - ci-proof/r72-reconcile
+      - pg18_schema:
+          filters:
+            branches:
+              only:
+                - ci-migration/r76-circleci
+                - ci-proof/r72-reconcile
+      - frontend_unit_types:
+          filters:
+            branches:
+              only:
+                - ci-migration/r76-circleci
+                - ci-proof/r72-reconcile
