@@ -268,6 +268,13 @@ def test_tayyorlik_BAZA_YARATMAYDI(tmp_path, monkeypatch):
 
 
 def test_build_metadata_ochiq_va_SIRSIZ(client, monkeypatch):
+    #  ⚠️  BU TEST MUHIT FALLBACKINI qulflaydi (Phase 9). Reliz MUHRI
+    #      (`app/_build_info.py`) bo'lsa u muhit o'zgaruvchisidan USTUN
+    #      bo'ladi va `commit` muhrdan kelardi — ya'ni bu test reliz
+    #      shoxida YOLG'ON QIZIL bo'lardi. Shu bois muhr ANIQ YO'Q deb
+    #      belgilanadi: test o'z shartini O'ZI o'rnatadi.
+    from app.core import build_identity as _bi
+    monkeypatch.setattr(_bi, "read_stamp", lambda: None)
     monkeypatch.setenv("RAILWAY_GIT_COMMIT_SHA", "0123456789abcdef0123456789abcdef01234567")
     monkeypatch.setenv("APP_ENV", "test")
     monkeypatch.setenv("RAILWAY_ENVIRONMENT_NAME", "staging")
@@ -327,7 +334,14 @@ def test_production_da_obyekt_NOMLARI_chiqmaydi(monkeypatch, client):
 
 
 def test_build_SHA_OYLAB_TOPILMAYDI(client, monkeypatch):
-    """Platforma bermasa — `None`. Yolg'on SHA ko'rsatilmasin."""
+    """Platforma bermasa — `None`. Yolg'on SHA ko'rsatilmasin.
+
+    ⚠️  MUHR ANIQ YO'Q deb belgilanadi (Phase 9): muhr bo'lsa commit
+        undan kelardi va bu test reliz shoxida yolg'on qizil bo'lardi.
+        Muhrli holat `tests/test_build_identity.py` da qamralgan.
+    """
+    from app.core import build_identity as _bi
+    monkeypatch.setattr(_bi, "read_stamp", lambda: None)
     for k in ("RAILWAY_GIT_COMMIT_SHA", "RAILWAY_GIT_COMMIT", "SOURCE_COMMIT",
               "GIT_COMMIT", "APP_COMMIT_SHA"):
         monkeypatch.delenv(k, raising=False)

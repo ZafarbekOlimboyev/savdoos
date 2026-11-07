@@ -19,7 +19,7 @@ import os
 from fastapi import APIRouter, Response
 from sqlalchemy import text
 
-from app.core import api_capabilities
+from app.core import api_capabilities, build_identity
 from app.core.config import settings
 from app.db.session import SessionLocal
 
@@ -34,21 +34,44 @@ def build_info() -> dict:
     ya'ni «tuzatish chindan ham chiqdimi?» degan savolga ilovaning O'ZI javob
     bera olmasdi.
 
-    ⚠️  SHA O'YLAB TOPILMAYDI. Platforma bermasa — `None`. Yolg'on commit
+    ⚠️  SHA O'YLAB TOPILMAYDI. Manba bo'lmasa — `None`. Yolg'on commit
         ko'rsatgandan ko'ra «bilmayman» degan afzal.
+
+    ⚠️  IDENTITET MANBASI ENDI ARTEFAKT ICHIDA (2026-11-07, Phase 9).
+        Ilgari commit FAQAT muhit o'zgaruvchisidan olinardi va bu jonli
+        insidentga olib keldi: Railway git o'zgaruvchilarini `rollback`
+        deploymentida BERMAYDI, shu bois production AYNAN kutilgan
+        relizga qaytarilgan bo'lsa ham `commit` `null` keldi, demo
+        worker'ning darvozasi yolg'on yiqildi va do'kon 22,8 soat
+        muzladi. Batafsil: `app/core/build_identity.py`.
+
+        Endi tartib: MUHR (`app/_build_info.py`, artefakt ichida, o'zini
+        tekshiradi) > muhit o'zgaruvchisi (orqaga moslik, `ENV_ONLY`).
+        Muhr kod bilan mos kelmasa `commit` E'LON QILINMAYDI.
+
+    ⚠️  JAVOB MAYDONLARI QO'SHILDI, OLIB TASHLANMADI: eski mijozlar
+        `build.commit` ni o'qishda davom etadi. `source_digest` va
+        `trust` — YANGI maydonlar; ularni o'qimaydigan mijoz uchun
+        xulq o'zgarmaydi.
     """
     import os
-    sha = None
-    for key in ("RAILWAY_GIT_COMMIT_SHA", "RAILWAY_GIT_COMMIT", "SOURCE_COMMIT",
-                "GIT_COMMIT", "APP_COMMIT_SHA"):
-        val = (os.getenv(key) or "").strip()
-        if val:
-            sha = val
-            break
+    ident = build_identity.build_identity()
     env = (os.getenv("APP_ENV") or "").strip().lower() or None
-    return {"commit": sha, "environment": env,
-            "platform_environment": (os.getenv("RAILWAY_ENVIRONMENT_NAME") or "").strip().lower()
-            or None}
+    out = {"commit": ident["commit"], "environment": env,
+           "platform_environment": (os.getenv("RAILWAY_ENVIRONMENT_NAME") or "")
+           .strip().lower() or None,
+           #  ── RELIZ IDENTITETI (to'rt manba ATAYLAB ajratilgan) ──────
+           "commit_source": ident["commit_source"],
+           "trust": ident["trust"],
+           "source_digest": ident["source_digest"],
+           "stamp_matches_source": ident["stamp_matches_source"],
+           "sealed_at": ident["sealed_at"],
+           "deployment_id": ident["deployment_id"]}
+    #  ⚠️  Xato SABABI faqat SINF nomi sifatida chiqadi — bu endpoint
+    #      OCHIQ, fayl yo'llari oshkor bo'lmasin.
+    if ident.get("source_digest_error"):
+        out["source_digest_error"] = ident["source_digest_error"]
+    return out
 
 
 @router.get("/health")

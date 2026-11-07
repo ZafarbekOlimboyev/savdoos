@@ -7,7 +7,7 @@ from fastapi.responses import JSONResponse
 
 import app.models  # noqa: F401  (Base.metadata to'ldirish uchun)
 from app.api.v1 import api_router
-from app.core import error_codes, security_config
+from app.core import build_identity, error_codes, security_config
 from app.core.bodylimit import BodyLimitMiddleware
 from app.core.config import settings
 
@@ -52,6 +52,18 @@ if settings.production_on_sqlite:
 #     kalit bilan imzolardi. Shartlar endi `app/core/security_config` da — o'sha
 #     yagona manba `/health/ready` va `config_audit` tomonidan ham ishlatiladi,
 #     ya'ni ular bir-biridan uzoqlasha olmaydi.
+# ── RELIZ IDENTITETI: digestni BOOTDA hisoblaymiz ──────────────────────────
+# ⚠️  NEGA BOOTDA: `/health` TIRIKLIK tekshiruvi va ARZON qolishi SHART
+#     (modul docstringi). Manba digesti 231 fayl / ~5 MB bo'yicha bir
+#     marta ~250 ms oladi; uni birinchi `/health` so'roviga qoldirish
+#     tiriklik javobini sekinlashtirib, platforma healthcheck'ini
+#     chalg'itardi. Bootda hisoblansa keyingi hamma so'rov nol xarajat.
+#
+# ⚠️  YIQILMAYDI: `source_digest()` xatoni O'ZI yutadi va `None`
+#     qaytaradi. Digest hisoblanmasligi ilovani ko'tarilishdan
+#     TO'SMASLIGI kerak — u identitet MA'LUMOTI, xizmat sharti emas.
+build_identity.source_digest()
+
 _sec_bad = security_config.critical_failures()
 if _sec_bad:
     import logging
